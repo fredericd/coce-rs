@@ -1,6 +1,6 @@
 # Coce (Rust)
 
-Rust rewrite of [coce](../README.md), the book cover URL cache server.
+Book cover URL cache server.
 
 ## Build & run
 
