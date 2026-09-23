@@ -119,8 +119,8 @@ populateImg({"2847342257":"https://images-na.ssl-images-amazon.com/images/I/51LY
 
 ## Client-side usage
 
-See `sample-client.html` for a Coce sample usage from JavaScript. It uses
-`coceclient.js` module, which is use like this:
+See `sample-client.html` in `client-sample` directory for a Coce sample usage
+from JavaScript. It uses `coceclient.js` module, which is use like this:
 
 ```javascript
 // isbns is an array of ISBNs
