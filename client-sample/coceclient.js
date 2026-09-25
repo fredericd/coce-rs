@@ -43,12 +43,20 @@ function CoceClient(url, provider) {
                     founds[isbn] = url;
                     cbUpdateUI(isbn, url);
                 });
-            }   
+            },
+            error: function() {
+                // Request failed (network, timeout, ...): don't leave these
+                // ISBNs permanently stuck as "not found", let them be retried
+                // on the next fetch() call.
+                $.each(isbntosearch, function(i, isbn) {
+                    delete notfounds[isbn];
+                });
+            }
         });
     };
 
     this.reset = function() {
-        found = {};
+        founds = {};
         notfounds = {};
     };
 };
