@@ -6,6 +6,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tower_http::cors::CorsLayer;
 
 use crate::config::Config;
 use crate::error::AppError;
@@ -25,6 +26,10 @@ pub fn router(state: AppState) -> Router {
         .route("/cover", get(cover))
         .route("/set", get(set))
         .with_state(state)
+        // Coce is meant to be called from browser JS running on whatever
+        // site embeds the cover images (a different origin than Coce
+        // itself), and the API has no auth model to scope by origin anyway.
+        .layer(CorsLayer::permissive())
 }
 
 async fn index() -> &'static str {

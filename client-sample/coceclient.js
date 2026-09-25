@@ -1,63 +1,65 @@
 /**
+ * Usage:
+ *
+ *   const client = new CoceClient('http://coceserver.com:8080', 'ol,gb,aws');
+ *   client.fetch(['isbn1', 'isbn2'], (id, url) => {
+ *     document.querySelector(`[data-id="${id}"]`).innerHTML = `<img src="${url}">`;
+ *   }).catch((err) => console.error('coce fetch failed:', err));
+ *
+ * fetch() returns a Promise, so a failed request can be handled with
+ * .catch() (or try/catch around await) instead of failing silently.
+ */
+class CoceClient {
+  #found = new Map();
+  #notFound = new Set();
 
-Usage:
-
-var cc = new CoceClient('http://coceserver.com:8080', 'ol,gb,aws');
-cc.fetch(['isbn1','isbn2'], function(isbn, url) {
-  $('#isbn_'+isbn).html('<img src="'+url+'">');
-});
-
-**/
-
-function CoceClient(url, provider) {
-
-    var founds = {};    // Private cache for already found ISBN
-    var notfounds = {}; // ISBN not found in Coce
-
+  constructor(url, providers) {
     this.url = url;
-    this.provider = provider;
+    this.providers = providers;
+  }
 
-    this.fetch = function(isbns, cbUpdateUI) {
-        // First, find ISBNs in client-side cache
-        var isbntosearch = [];
-        $.each(isbns, function(i, isbn){
-            var url = founds[isbn];
-            if (url) {
-                cbUpdateUI(isbn, url);
-            } else if (notfounds[isbn] == undefined) {
-                notfounds[isbn] = 1;
-                isbntosearch.push(isbn);
-            }
-        });
+  async fetch(ids, onFound) {
+    const toFetch = [];
 
-        if (isbntosearch.length == 0) return;
+    for (const id of ids) {
+      if (this.#found.has(id)) {
+        onFound(id, this.#found.get(id));
+      } else if (!this.#notFound.has(id)) {
+        this.#notFound.add(id);
+        toFetch.push(id);
+      }
+    }
 
-        var url = this.url,
-            provider = this.provider;
-        $.ajax({
-            url: url + '/cover?id=' + isbntosearch.join(',') + '&provider=' + provider,
-            dataType: 'jsonp',
-            success: function(urlPerISBN) {
-                $.each(urlPerISBN, function(isbn, url) {
-                    delete notfounds[isbn];
-                    founds[isbn] = url;
-                    cbUpdateUI(isbn, url);
-                });
-            },
-            error: function() {
-                // Request failed (network, timeout, ...): don't leave these
-                // ISBNs permanently stuck as "not found", let them be retried
-                // on the next fetch() call.
-                $.each(isbntosearch, function(i, isbn) {
-                    delete notfounds[isbn];
-                });
-            }
-        });
-    };
+    if (toFetch.length === 0) return;
 
-    this.reset = function() {
-        founds = {};
-        notfounds = {};
-    };
-};
+    const params = new URLSearchParams({
+      id: toFetch.join(','),
+      provider: this.providers,
+    });
 
+    let urlPerId;
+    try {
+      const response = await fetch(`${this.url}/cover?${params}`);
+      if (!response.ok) {
+        throw new Error(`coce request failed: HTTP ${response.status}`);
+      }
+      urlPerId = await response.json();
+    } catch (err) {
+      // The request failed: don't leave these ids permanently stuck as "not
+      // found", let them be retried on the next fetch() call.
+      for (const id of toFetch) this.#notFound.delete(id);
+      throw err;
+    }
+
+    for (const [id, url] of Object.entries(urlPerId)) {
+      this.#notFound.delete(id);
+      this.#found.set(id, url);
+      onFound(id, url);
+    }
+  }
+
+  reset() {
+    this.#found.clear();
+    this.#notFound.clear();
+  }
+}
