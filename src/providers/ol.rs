@@ -81,6 +81,9 @@ async fn search(isbns: &[&str], http: &reqwest::Client) -> Option<Vec<Value>> {
         .get("https://openlibrary.org/search.json")
         .query(&[
             ("q", query.as_str()),
+            // `key` looks unused but is required: Open Library filters the
+            // `editions` subquery on each work's key (`$row.key`), so without
+            // it no edition ever matches and no cover is found.
             ("fields", "key,editions,editions.cover_i,editions.isbn"),
             ("limit", limit.as_str()),
         ])
