@@ -23,6 +23,19 @@ pub async fn get_many(
     con.mget(keys).await
 }
 
+/// Write several keys with the same TTL in a single round trip.
+pub async fn set_many_ex(
+    con: &mut ConnectionManager,
+    entries: &[(String, String)],
+    ttl_seconds: u64,
+) -> redis::RedisResult<()> {
+    let mut pipe = redis::pipe();
+    for (key, value) in entries {
+        pipe.set_ex(key, value, ttl_seconds).ignore();
+    }
+    pipe.query_async(con).await
+}
+
 pub async fn set_ex(
     con: &mut ConnectionManager,
     key: &str,

@@ -44,7 +44,9 @@ By default `config.json` is read from the current directory; the
   * `redis` - Redis server parameters:
      * `host`
      * `port`
-     * `timeout`
+     * `timeout` - timeout in milliseconds for Redis reads and writes. When
+       Redis is slow or down, Coce bypasses the cache and queries providers
+       directly instead of waiting
   * `cache` - Local cache for images
     * `path` - path to the directory where images are cached locally
     * `url` - base url to the `path` directory

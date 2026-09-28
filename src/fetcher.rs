@@ -84,6 +84,7 @@ async fn fetch_provider(
     );
     let cache_locally = cfg.provider_config(provider).map(|c| c.cache).unwrap_or(false);
 
+    let mut writes = Vec::with_capacity(notcached.len());
     for id in &notcached {
         let key = format!("{provider}.{id}");
         match fetched.get(id) {
@@ -94,19 +95,39 @@ async fn fetch_provider(
                 } else {
                     remote_url.clone()
                 };
-                if let Err(e) = redis_store::set_ex(&mut con, &key, ttl, &stored_url).await {
-                    tracing::warn!(%key, error = %e, "redis write failed");
-                }
+                writes.push((key, stored_url.clone()));
                 found.insert(id.clone(), stored_url);
             }
             None => {
                 // Remember the miss so we don't hit the provider again for a while.
-                if let Err(e) = redis_store::set_ex(&mut con, &key, ttl, "").await {
-                    tracing::warn!(%key, error = %e, "redis write failed");
-                }
+                writes.push((key, String::new()));
             }
         }
     }
+
+    // Don't make the client wait for the cache to be filled: write in the
+    // background, bounded by the Redis timeout so that a Redis outage (where
+    // the connection manager keeps retrying to reconnect) can't pile up
+    // stuck tasks.
+    let redis_timeout = cfg.redis.timeout;
+    let provider = provider.to_string();
+    tokio::spawn(async move {
+        let result = tokio::time::timeout(
+            Duration::from_millis(redis_timeout),
+            redis_store::set_many_ex(&mut con, &writes, ttl),
+        )
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(%provider, keys = writes.len(), error = %e, "redis write failed"),
+            Err(_) => tracing::warn!(
+                %provider,
+                keys = writes.len(),
+                timeout_ms = redis_timeout,
+                "redis write timed out"
+            ),
+        }
+    });
 
     found
 }

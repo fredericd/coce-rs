@@ -6,6 +6,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -111,8 +112,16 @@ struct SetQuery {
 async fn set(State(state): State<AppState>, Query(q): Query<SetQuery>) -> Response {
     let mut con = state.redis.clone();
     let key = format!("{}.{}", q.provider, q.id);
-    if let Err(e) = redis_store::set_ex(&mut con, &key, 315_360_000, &q.url).await {
-        tracing::warn!(%key, error = %e, "redis write failed");
+    let timeout_ms = state.config.redis.timeout;
+    match tokio::time::timeout(
+        Duration::from_millis(timeout_ms),
+        redis_store::set_ex(&mut con, &key, 315_360_000, &q.url),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(%key, error = %e, "redis write failed"),
+        Err(_) => tracing::warn!(%key, timeout_ms, "redis write timed out"),
     }
     Json(serde_json::json!({ "success": true })).into_response()
 }
