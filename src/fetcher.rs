@@ -1,9 +1,9 @@
 use crate::config::Config;
 use crate::providers;
 use crate::redis_store::{self, RedisManager};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 /// id -> provider -> url
@@ -48,14 +48,40 @@ async fn fetch_provider(
                 }
             }
         }
-        _ => notcached = ids.to_vec(),
+        Ok(Err(e)) => {
+            tracing::warn!(provider, error = %e, "redis read failed, bypassing cache");
+            notcached = ids.to_vec();
+        }
+        Err(_) => {
+            tracing::warn!(
+                provider,
+                timeout_ms = cfg.redis.timeout,
+                "redis read timed out, bypassing cache"
+            );
+            notcached = ids.to_vec();
+        }
     }
+
+    tracing::debug!(
+        provider,
+        requested = ids.len(),
+        cache_misses = notcached.len(),
+        "cache lookup"
+    );
 
     if notcached.is_empty() {
         return found;
     }
 
+    let started = Instant::now();
     let fetched = providers::call(provider, &notcached, cfg, http).await;
+    tracing::debug!(
+        provider,
+        queried = notcached.len(),
+        found = fetched.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "provider fetched"
+    );
     let cache_locally = cfg.provider_config(provider).map(|c| c.cache).unwrap_or(false);
 
     for id in &notcached {
@@ -68,12 +94,16 @@ async fn fetch_provider(
                 } else {
                     remote_url.clone()
                 };
-                let _ = redis_store::set_ex(&mut con, &key, ttl, &stored_url).await;
+                if let Err(e) = redis_store::set_ex(&mut con, &key, ttl, &stored_url).await {
+                    tracing::warn!(%key, error = %e, "redis write failed");
+                }
                 found.insert(id.clone(), stored_url);
             }
             None => {
                 // Remember the miss so we don't hit the provider again for a while.
-                let _ = redis_store::set_ex(&mut con, &key, ttl, "").await;
+                if let Err(e) = redis_store::set_ex(&mut con, &key, ttl, "").await {
+                    tracing::warn!(%key, error = %e, "redis write failed");
+                }
             }
         }
     }
@@ -98,13 +128,21 @@ fn cache_image_locally(
     let remote_url = remote_url.to_string();
     let http = http.clone();
     tokio::spawn(async move {
-        if tokio::fs::create_dir_all(&dir).await.is_err() {
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            tracing::warn!(%dir, error = %e, "cannot create local cache directory");
             return;
         }
-        if let Ok(resp) = http.get(&remote_url).send().await {
-            if let Ok(bytes) = resp.bytes().await {
-                let _ = tokio::fs::write(&dest, &bytes).await;
+        let bytes = match http.get(&remote_url).send().await {
+            Ok(resp) => resp.bytes().await,
+            Err(e) => Err(e),
+        };
+        match bytes {
+            Ok(bytes) => {
+                if let Err(e) = tokio::fs::write(&dest, &bytes).await {
+                    tracing::warn!(%dest, error = %e, "cannot write cached image");
+                }
             }
+            Err(e) => tracing::warn!(url = %remote_url, error = %e, "image download failed"),
         }
     });
 
@@ -139,16 +177,32 @@ pub async fn fetch(
             for (id, url) in result {
                 guard.entry(id).or_default().insert(provider.clone(), url);
             }
+            provider
         });
     }
 
+    let mut done = HashSet::new();
     let wait_all = async {
-        while tasks.join_next().await.is_some() {}
+        while let Some(res) = tasks.join_next().await {
+            match res {
+                Ok(provider) => {
+                    done.insert(provider);
+                }
+                Err(e) => tracing::error!(error = %e, "provider task failed"),
+            }
+        }
     };
 
     tokio::select! {
         _ = wait_all => {}
-        _ = tokio::time::sleep(Duration::from_millis(cfg.timeout)) => {}
+        _ = tokio::time::sleep(Duration::from_millis(cfg.timeout)) => {
+            let pending: Vec<&String> = providers.iter().filter(|p| !done.contains(*p)).collect();
+            tracing::warn!(
+                timeout_ms = cfg.timeout,
+                ?pending,
+                "global timeout reached, returning partial results"
+            );
+        }
     }
 
     let result = shared.lock().await.clone();

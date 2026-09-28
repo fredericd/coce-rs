@@ -5,9 +5,11 @@ pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Hash
     let mut found = HashMap::new();
 
     let Some(orb_cfg) = cfg.orb.as_ref() else {
+        tracing::warn!(provider = "orb", "provider enabled but not configured");
         return found;
     };
     let (Some(user), Some(key)) = (orb_cfg.user.as_ref(), orb_cfg.key.as_ref()) else {
+        tracing::warn!(provider = "orb", "missing user or key in configuration");
         return found;
     };
 
@@ -18,11 +20,23 @@ pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Hash
 
     let resp = match http.get(&url).basic_auth(user, Some(key)).send().await {
         Ok(r) => r,
-        Err(_) => return found,
+        Err(e) => {
+            tracing::warn!(provider = "orb", error = %e, "request failed");
+            return found;
+        }
     };
+    let status = resp.status();
+    if !status.is_success() {
+        // 401/403 here almost always means bad credentials.
+        tracing::warn!(provider = "orb", %status, "unexpected HTTP status");
+        return found;
+    }
     let json: serde_json::Value = match resp.json().await {
         Ok(v) => v,
-        Err(_) => return found,
+        Err(e) => {
+            tracing::warn!(provider = "orb", error = %e, "unparseable response");
+            return found;
+        }
     };
 
     if let Some(items) = json.get("data").and_then(|d| d.as_array()) {

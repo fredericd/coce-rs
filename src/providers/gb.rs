@@ -10,15 +10,28 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, St
         ids.join(",")
     );
 
-    let body = match http.get(&url).send().await {
-        Ok(resp) => match resp.text().await {
-            Ok(t) => t,
-            Err(_) => return found,
-        },
-        Err(_) => return found,
+    let resp = match http.get(&url).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::warn!(provider = "gb", error = %e, "request failed");
+            return found;
+        }
+    };
+    let status = resp.status();
+    if !status.is_success() {
+        tracing::warn!(provider = "gb", %status, "unexpected HTTP status");
+        return found;
+    }
+    let body = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(provider = "gb", error = %e, "cannot read response body");
+            return found;
+        }
     };
 
     let Some(Value::Object(items)) = extract_js_object(&body) else {
+        tracing::warn!(provider = "gb", "unparseable response");
         return found;
     };
 

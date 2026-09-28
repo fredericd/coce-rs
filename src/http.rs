@@ -7,6 +7,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 
 use crate::config::Config;
 use crate::error::AppError;
@@ -30,6 +31,10 @@ pub fn router(state: AppState) -> Router {
         // site embeds the cover images (a different origin than Coce
         // itself), and the API has no auth model to scope by origin anyway.
         .layer(CorsLayer::permissive())
+        // Access log: one event per request/response, at `debug` level under
+        // the `tower_http` target, so it stays silent unless explicitly
+        // enabled (e.g. `RUST_LOG=coce=info,tower_http=debug`).
+        .layer(TraceLayer::new_for_http())
 }
 
 async fn index() -> &'static str {
@@ -106,6 +111,8 @@ struct SetQuery {
 async fn set(State(state): State<AppState>, Query(q): Query<SetQuery>) -> Response {
     let mut con = state.redis.clone();
     let key = format!("{}.{}", q.provider, q.id);
-    let _ = redis_store::set_ex(&mut con, &key, 315_360_000, &q.url).await;
+    if let Err(e) = redis_store::set_ex(&mut con, &key, 315_360_000, &q.url).await {
+        tracing::warn!(%key, error = %e, "redis write failed");
+    }
     Json(serde_json::json!({ "success": true })).into_response()
 }

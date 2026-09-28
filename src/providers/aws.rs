@@ -17,21 +17,29 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, St
             "https://images-na.ssl-images-amazon.com/images/P/{search}.01.MZZZZZZZZZ.jpg"
         );
 
-        if let Ok(resp) = http
+        match http
             .head(&url)
             .header("user-agent", "Mozilla/5.0")
             .send()
             .await
         {
-            let status = resp.status().as_u16();
-            let is_placeholder = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|ct| ct.starts_with("image/gif"));
-            if (status == 200 || status == 403) && !is_placeholder {
-                found.insert(id.clone(), url);
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let content_type = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                let is_placeholder = content_type.starts_with("image/gif");
+                tracing::debug!(provider = "aws", %id, status, content_type, "probe");
+                if (status == 200 || status == 403) && !is_placeholder {
+                    found.insert(id.clone(), url);
+                } else if status != 200 && status != 403 && status != 404 {
+                    // Typically 429/503: Amazon is throttling us.
+                    tracing::warn!(provider = "aws", %id, status, "unexpected HTTP status");
+                }
             }
+            Err(e) => tracing::warn!(provider = "aws", %id, error = %e, "request failed"),
         }
 
         // Amazon throttles/blocks bursts of HEAD requests; space them out.
