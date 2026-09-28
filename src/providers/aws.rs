@@ -8,11 +8,18 @@ use std::time::Duration;
 /// When Amazon has no cover for an ISBN, it doesn't 404: it serves a 1x1
 /// placeholder GIF with a 200 status instead. Real covers are always JPEG,
 /// so a `content-type: image/gif` response is that placeholder, not a cover.
+///
+/// IDs with no ISBN-10 equivalent (979-prefixed ISBN-13) are skipped: Amazon
+/// would map them to an unrelated book's cover (see `to_amazon_key`).
 pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, String> {
     let mut found = HashMap::new();
 
-    for (idx, id) in ids.iter().enumerate() {
-        let search = to_amazon_key(id);
+    let keys: Vec<(&String, String)> = ids
+        .iter()
+        .filter_map(|id| to_amazon_key(id).map(|key| (id, key)))
+        .collect();
+
+    for (idx, (id, search)) in keys.iter().enumerate() {
         let url = format!(
             "https://images-na.ssl-images-amazon.com/images/P/{search}.01.MZZZZZZZZZ.jpg"
         );
@@ -33,7 +40,7 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, St
                 let is_placeholder = content_type.starts_with("image/gif");
                 tracing::debug!(provider = "aws", %id, status, content_type, "probe");
                 if (status == 200 || status == 403) && !is_placeholder {
-                    found.insert(id.clone(), url);
+                    found.insert((*id).clone(), url);
                 } else if status != 200 && status != 403 && status != 404 {
                     // Typically 429/503: Amazon is throttling us.
                     tracing::warn!(provider = "aws", %id, status, "unexpected HTTP status");
@@ -44,7 +51,7 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, St
 
         // Amazon throttles/blocks bursts of HEAD requests; space them out.
         // There may be another more efficient method...
-        if idx + 1 < ids.len() {
+        if idx + 1 < keys.len() {
             tokio::time::sleep(Duration::from_millis(30)).await;
         }
     }
@@ -53,10 +60,18 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, St
 }
 
 /// ISBN13 -> ISBN10 conversion (Amazon's image path is keyed by ISBN10/ASIN).
-fn to_amazon_key(id: &str) -> String {
+///
+/// Only 978-prefixed ISBN-13 have an ISBN-10 equivalent. A 979-prefixed one
+/// has none: dropping its prefix yields the ISBN-10 of an unrelated
+/// 978-prefixed book, and Amazon does the same when given the ISBN-13
+/// directly, so it can only ever return a wrong cover. Those get `None`.
+fn to_amazon_key(id: &str) -> Option<String> {
     let stripped: String = id.chars().filter(|c| *c != '-').collect();
     if stripped.len() != 13 {
-        return stripped;
+        return Some(stripped);
+    }
+    if !stripped.starts_with("978") {
+        return None;
     }
 
     let core: String = stripped.chars().skip(3).take(9).collect();
@@ -72,7 +87,7 @@ fn to_amazon_key(id: &str) -> String {
         checksum.to_string()
     };
 
-    format!("{core}{check_char}")
+    Some(format!("{core}{check_char}"))
 }
 
 #[cfg(test)]
@@ -81,11 +96,18 @@ mod tests {
 
     #[test]
     fn isbn13_to_isbn10() {
-        assert_eq!(to_amazon_key("9780821417492"), "0821417495");
+        assert_eq!(to_amazon_key("9780821417492").as_deref(), Some("0821417495"));
+        assert_eq!(to_amazon_key("978-0-8214-1749-2").as_deref(), Some("0821417495"));
     }
 
     #[test]
     fn isbn10_passthrough() {
-        assert_eq!(to_amazon_key("275403143X"), "275403143X");
+        assert_eq!(to_amazon_key("275403143X").as_deref(), Some("275403143X"));
+    }
+
+    #[test]
+    fn isbn13_979_has_no_amazon_key() {
+        assert_eq!(to_amazon_key("9798885795692"), None);
+        assert_eq!(to_amazon_key("979-8-88579-569-2"), None);
     }
 }
