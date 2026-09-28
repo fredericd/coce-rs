@@ -13,7 +13,8 @@ services to retrieve information on Books from an ID (ISBN for example).
 * [Google API](https://developers.google.com/books/docs/dynamic-links)
 * [Amazon Product Advertising
   API](https://affiliate-program.amazon.com/gp/advertising/api/detail/main.html)
-* [Open Library Read API](http://openlibrary.org/dev/docs/api/read)
+* [Open Library Search API](https://openlibrary.org/dev/docs/api/search) and
+  [Covers API](https://openlibrary.org/dev/docs/api/covers)
 * [ORB](https://www.base-orb.fr)
 
 With Coce, the cover images URL from various providers are cached in a Redis
@@ -57,6 +58,13 @@ By default `config.json` is read from the current directory; the
        delay, an URL is automatically removed from the cache, and so has to be
        re-fetched again if requested
      * `imageSize` - size of images: small, medium, large
+
+     ISBNs are looked up in batch through the Open Library Search API, and
+     the cover of the edition matching each ISBN is returned as a Covers API
+     URL by cover ID (`https://covers.openlibrary.org/b/id/<id>-M.jpg`),
+     which is not rate limited. Known limitation: when several edition
+     records share the same ISBN, Open Library's search returns only one of
+     them, so a cover attached to another duplicate record is missed.
   * `aws` - Amazon
      * `imageSize` - size of images: SmallImage, MediumImage, LargeImage
      * `timeout` - timeout when probing images url via direct http requests

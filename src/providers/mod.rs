@@ -23,7 +23,7 @@ pub async fn call(
     }
 }
 
-/// Google Books and Open Library both reply with a JS assignment
+/// Google Books replies with a JS assignment
 /// (`_SomeVar = { ... };`) instead of a bare JSON document.
 pub(crate) fn extract_js_object(body: &str) -> Option<serde_json::Value> {
     let start = body.find('{')?;
