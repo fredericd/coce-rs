@@ -1,3 +1,4 @@
+use crate::breaker::Breakers;
 use crate::config::Config;
 use crate::providers;
 use crate::redis_store::{self, RedisManager};
@@ -10,13 +11,17 @@ use tokio::sync::Mutex;
 pub type UrlMap = HashMap<String, HashMap<String, String>>;
 
 /// Check Redis for cached URLs, fall back to the live provider for whatever
-/// is missing, and cache the outcome (including "not found") back in Redis.
+/// is missing, and cache the provider's definitive answers (including "not
+/// found") back in Redis. IDs the provider couldn't answer for (because it
+/// failed, or is disabled by its circuit breaker) are not cached, so they're
+/// looked up again once the provider is back.
 async fn fetch_provider(
     provider: &str,
     ids: &[String],
     cfg: &Config,
     redis: &RedisManager,
     http: &reqwest::Client,
+    breakers: &Breakers,
 ) -> HashMap<String, String> {
     let mut con = redis.clone();
     let ttl = cfg.provider_config(provider).map(|c| c.timeout).unwrap_or(86_400);
@@ -73,12 +78,24 @@ async fn fetch_provider(
         return found;
     }
 
+    if !breakers.allow(provider) {
+        tracing::debug!(provider, skipped = notcached.len(), "provider disabled, skipped");
+        return found;
+    }
+
     let started = Instant::now();
-    let fetched = providers::call(provider, &notcached, cfg, http).await;
+    let outcome = providers::call(provider, &notcached, cfg, http).await;
+    if outcome.failed {
+        breakers.record_failure(provider);
+    } else {
+        breakers.record_success(provider);
+    }
     tracing::debug!(
         provider,
         queried = notcached.len(),
-        found = fetched.len(),
+        answered = outcome.answers.len(),
+        found = outcome.answers.values().filter(|url| url.is_some()).count(),
+        failed = outcome.failed,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "provider fetched"
     );
@@ -87,8 +104,8 @@ async fn fetch_provider(
     let mut writes = Vec::with_capacity(notcached.len());
     for id in &notcached {
         let key = format!("{provider}.{id}");
-        match fetched.get(id) {
-            Some(remote_url) => {
+        match outcome.answers.get(id) {
+            Some(Some(remote_url)) => {
                 let stored_url = if cache_locally {
                     cache_image_locally(provider, id, remote_url, cfg, http)
                         .unwrap_or_else(|| remote_url.clone())
@@ -98,11 +115,17 @@ async fn fetch_provider(
                 writes.push((key, stored_url.clone()));
                 found.insert(id.clone(), stored_url);
             }
-            None => {
+            Some(None) => {
                 // Remember the miss so we don't hit the provider again for a while.
                 writes.push((key, String::new()));
             }
+            // No reliable answer: nothing to remember.
+            None => {}
         }
+    }
+
+    if writes.is_empty() {
+        return found;
     }
 
     // Don't make the client wait for the cache to be filled: write in the
@@ -180,6 +203,7 @@ pub async fn fetch(
     cfg: &Arc<Config>,
     redis: &RedisManager,
     http: &reqwest::Client,
+    breakers: &Arc<Breakers>,
 ) -> UrlMap {
     let shared: Arc<Mutex<UrlMap>> = Arc::new(Mutex::new(HashMap::new()));
     let mut tasks = tokio::task::JoinSet::new();
@@ -190,10 +214,11 @@ pub async fn fetch(
         let cfg = cfg.clone();
         let redis = redis.clone();
         let http = http.clone();
+        let breakers = breakers.clone();
         let shared = shared.clone();
 
         tasks.spawn(async move {
-            let result = fetch_provider(&provider, &ids, &cfg, &redis, &http).await;
+            let result = fetch_provider(&provider, &ids, &cfg, &redis, &http, &breakers).await;
             let mut guard = shared.lock().await;
             for (id, url) in result {
                 guard.entry(id).or_default().insert(provider.clone(), url);

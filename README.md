@@ -42,6 +42,12 @@ By default `config.json` is read from the current directory; the
   * `providers` - array of available providers: gb,aws,ol
   * `timeout` - timeout in miliseconds for the service. Above this value, Coce
     stops waiting response from providers
+  * `providerTimeout` - timeout in milliseconds of each HTTP request to a
+    provider (default 5000). Keep it lower than `timeout`: a provider that
+    doesn't answer within this delay counts as failing (see [Provider
+    failures](#provider-failures))
+  * `providerRetry` - how long in seconds a failing provider stays disabled
+    before Coce tries it again (default 300)
   * `redis` - Redis server parameters:
      * `host`
      * `port`
@@ -73,6 +79,26 @@ By default `config.json` is read from the current directory; the
      * `key` - API key
      * `cache` - true/false, are images locally cached (and served)
      * `timeout` - timeout when probing images url via direct http requests
+
+### Provider failures
+
+Coce tells apart a provider answering "no cover for this ID", which is
+cached like a found cover, from a provider failing to answer: network error,
+timeout (`providerTimeout`), throttling (429), server error (5xx), unexpected
+response. A failure is never cached, so the ID is looked up again once the
+provider is back, instead of being reported as coverless for the whole cache
+duration.
+
+Each provider has its own circuit breaker. After 3 consecutive failed calls,
+the provider is disabled for `providerRetry` seconds: Coce stops calling it
+and answers with the other requested providers, without waiting. When the
+delay is over, a single request tests the provider again: on success it is
+re-enabled, otherwise it stays disabled for another `providerRetry` seconds.
+A 400 Bad Request doesn't count as a failure, since it can be caused by the
+IDs sent rather than by the provider.
+
+The breaker state is kept in memory, per Coce instance, and is reset on
+restart.
 
 ## Service usage
 
@@ -226,9 +252,9 @@ wrong.
 | Level   | What gets logged |
 |---------|------------------|
 | `ERROR` | A provider task crashed (panic) |
-| `WARN`  | Redis unreachable or too slow (the cache is then bypassed), Redis write failures, provider network errors or unexpected HTTP status (e.g. Amazon throttling with 429/503, wrong ORB credentials), unparseable provider responses, local image cache failures (directory, download, write), global `timeout` reached (with the list of providers still pending) |
-| `INFO`  | Startup: configuration summary and listening port |
-| `DEBUG` | Per request and per provider: cache lookup (IDs requested / cache misses), provider call (IDs queried / found / duration), Amazon probe details (HTTP status, content-type); HTTP access log (see below) |
+| `WARN`  | Redis unreachable or too slow (the cache is then bypassed), Redis write failures, provider network errors, timeouts or unexpected HTTP status (e.g. Amazon throttling with 429/503, wrong ORB credentials), unparseable provider responses, provider disabled by its circuit breaker, local image cache failures (directory, download, write), global `timeout` reached (with the list of providers still pending), `providerTimeout` not lower than `timeout` |
+| `INFO`  | Startup: configuration summary and listening port; provider re-enabled after a failure |
+| `DEBUG` | Per request and per provider: cache lookup (IDs requested / cache misses), provider call (IDs queried / answered / found / failed / duration), provider skipped because disabled, Amazon probe details (HTTP status, content-type); HTTP access log (see below) |
 
 ### Choosing what to log: `RUST_LOG`
 
@@ -317,10 +343,12 @@ production, stick with the default level.
 - `config.rs` — loading/typing of `config.json` (`serde_json`, no `eval`)
 - `redis_store.rs` — thin wrapper around `redis::aio::ConnectionManager`
 - `providers/` — one module per provider (`aws`, `gb`, `ol`, `orb`), each
-  exposing a `fetch(ids, ...) -> HashMap<id, url>` function
+  exposing a `fetch(ids, ...) -> Outcome` function: definitive answers per
+  ID (cover URL or none), plus whether the call failed
 - `fetcher.rs` — orchestration: checks the Redis cache, calls the missing
   providers in parallel, enforces a global timeout, writes results (and
   misses) back to Redis
+- `breaker.rs` — per-provider circuit breaker (lock-free atomics)
 - `http.rs` — Axum routes (`/`, `/cover`, `/set`)
 - `error.rs` — HTTP errors (JSON `{"error": ...}` responses)
 

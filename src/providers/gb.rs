@@ -1,10 +1,8 @@
-use super::extract_js_object;
+use super::{extract_js_object, Outcome};
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, String> {
-    let mut found = HashMap::new();
-
+pub async fn fetch(ids: &[String], http: &reqwest::Client) -> Outcome {
     let url = format!(
         "https://books.google.com/books?bibkeys={}&jscmd=viewapi&hl=en",
         ids.join(",")
@@ -14,27 +12,28 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, St
         Ok(resp) => resp,
         Err(e) => {
             tracing::warn!(provider = "gb", error = %e, "request failed");
-            return found;
+            return Outcome::failure();
         }
     };
     let status = resp.status();
     if !status.is_success() {
         tracing::warn!(provider = "gb", %status, "unexpected HTTP status");
-        return found;
+        return Outcome::bad_status(status);
     }
     let body = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(provider = "gb", error = %e, "cannot read response body");
-            return found;
+            return Outcome::failure();
         }
     };
 
     let Some(Value::Object(items)) = extract_js_object(&body) else {
         tracing::warn!(provider = "gb", "unparseable response");
-        return found;
+        return Outcome::failure();
     };
 
+    let mut found = HashMap::new();
     for (_, item) in items {
         let bib_key = item.get("bib_key").and_then(Value::as_str);
         let thumbnail = item.get("thumbnail_url").and_then(Value::as_str);
@@ -44,5 +43,5 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, St
         }
     }
 
-    found
+    Outcome::complete(ids, found)
 }

@@ -1,16 +1,15 @@
+use super::Outcome;
 use crate::config::Config;
 use std::collections::HashMap;
 
-pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> HashMap<String, String> {
-    let mut found = HashMap::new();
-
+pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Outcome {
     let Some(orb_cfg) = cfg.orb.as_ref() else {
         tracing::warn!(provider = "orb", "provider enabled but not configured");
-        return found;
+        return Outcome::failure();
     };
     let (Some(user), Some(key)) = (orb_cfg.user.as_ref(), orb_cfg.key.as_ref()) else {
         tracing::warn!(provider = "orb", "missing user or key in configuration");
-        return found;
+        return Outcome::failure();
     };
 
     let url = format!(
@@ -22,23 +21,24 @@ pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Hash
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(provider = "orb", error = %e, "request failed");
-            return found;
+            return Outcome::failure();
         }
     };
     let status = resp.status();
     if !status.is_success() {
         // 401/403 here almost always means bad credentials.
         tracing::warn!(provider = "orb", %status, "unexpected HTTP status");
-        return found;
+        return Outcome::bad_status(status);
     }
     let json: serde_json::Value = match resp.json().await {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(provider = "orb", error = %e, "unparseable response");
-            return found;
+            return Outcome::failure();
         }
     };
 
+    let mut found = HashMap::new();
     if let Some(items) = json.get("data").and_then(|d| d.as_array()) {
         for item in items {
             let ean = item.get("ean13").and_then(|v| v.as_str());
@@ -54,5 +54,5 @@ pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Hash
         }
     }
 
-    found
+    Outcome::complete(ids, found)
 }

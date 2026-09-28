@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use super::Outcome;
 use std::time::Duration;
 
 /// Amazon has no public cover-lookup API; instead we probe the predictable
@@ -11,13 +11,22 @@ use std::time::Duration;
 ///
 /// IDs with no ISBN-10 equivalent (979-prefixed ISBN-13) are skipped: Amazon
 /// would map them to an unrelated book's cover (see `to_amazon_key`).
-pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, String> {
-    let mut found = HashMap::new();
+///
+/// On a network error, throttling (429) or server error (5xx), the remaining
+/// IDs are left unanswered rather than probed anyway: they would most likely
+/// fail the same way, each one adding to the response time.
+pub async fn fetch(ids: &[String], http: &reqwest::Client) -> Outcome {
+    let mut outcome = Outcome::default();
 
-    let keys: Vec<(&String, String)> = ids
-        .iter()
-        .filter_map(|id| to_amazon_key(id).map(|key| (id, key)))
-        .collect();
+    let mut keys: Vec<(&String, String)> = Vec::with_capacity(ids.len());
+    for id in ids {
+        match to_amazon_key(id) {
+            Some(key) => keys.push((id, key)),
+            None => {
+                outcome.answers.insert(id.clone(), None);
+            }
+        }
+    }
 
     for (idx, (id, search)) in keys.iter().enumerate() {
         let url = format!(
@@ -39,14 +48,26 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, St
                     .unwrap_or("");
                 let is_placeholder = content_type.starts_with("image/gif");
                 tracing::debug!(provider = "aws", %id, status, content_type, "probe");
-                if (status == 200 || status == 403) && !is_placeholder {
-                    found.insert((*id).clone(), url);
-                } else if status != 200 && status != 403 && status != 404 {
-                    // Typically 429/503: Amazon is throttling us.
-                    tracing::warn!(provider = "aws", %id, status, "unexpected HTTP status");
+                match status {
+                    200 | 403 if !is_placeholder => {
+                        outcome.answers.insert((*id).clone(), Some(url));
+                    }
+                    200 | 404 => {
+                        outcome.answers.insert((*id).clone(), None);
+                    }
+                    429 | 500.. => {
+                        tracing::warn!(provider = "aws", %id, status, "unexpected HTTP status");
+                        outcome.failed = true;
+                        break;
+                    }
+                    _ => tracing::warn!(provider = "aws", %id, status, "unexpected HTTP status"),
                 }
             }
-            Err(e) => tracing::warn!(provider = "aws", %id, error = %e, "request failed"),
+            Err(e) => {
+                tracing::warn!(provider = "aws", %id, error = %e, "request failed");
+                outcome.failed = true;
+                break;
+            }
         }
 
         // Amazon throttles/blocks bursts of HEAD requests; space them out.
@@ -56,7 +77,7 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> HashMap<String, St
         }
     }
 
-    found
+    outcome
 }
 
 /// ISBN13 -> ISBN10 conversion (Amazon's image path is keyed by ISBN10/ASIN).

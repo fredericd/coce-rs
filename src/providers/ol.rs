@@ -1,3 +1,4 @@
+use super::{is_provider_failure, Outcome};
 use crate::config::Config;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -14,8 +15,8 @@ const MAX_ROUNDS: usize = 3;
 /// (`cover_i`), which may belong to any other edition of the work. The
 /// returned URL points to the Covers API by cover ID, which, unlike access
 /// by ISBN, is not rate limited.
-pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> HashMap<String, String> {
-    let mut found = HashMap::new();
+pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Outcome {
+    let mut outcome = Outcome::default();
 
     let size = match cfg.ol.as_ref().and_then(|c| c.image_size.as_deref()) {
         Some("small") => "S",
@@ -29,8 +30,11 @@ pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Hash
     // end up in the Solr query.
     let mut pending: HashMap<String, Vec<String>> = HashMap::new();
     for id in ids {
-        if let Some(isbn) = normalize_isbn(id) {
-            pending.entry(isbn).or_default().push(id.clone());
+        match normalize_isbn(id) {
+            Some(isbn) => pending.entry(isbn).or_default().push(id.clone()),
+            None => {
+                outcome.answers.insert(id.clone(), None);
+            }
         }
     }
 
@@ -39,8 +43,14 @@ pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Hash
             break;
         }
         let isbns: Vec<&str> = pending.keys().map(String::as_str).collect();
-        let Some(docs) = search(&isbns, http).await else {
-            break;
+        let docs = match search(&isbns, http).await {
+            Ok(docs) => docs,
+            Err(failed) => {
+                // Answers from previous rounds stand; the ISBNs still
+                // pending are left unanswered.
+                outcome.failed = failed;
+                return outcome;
+            }
         };
 
         let mut matched = false;
@@ -52,11 +62,10 @@ pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Hash
                     continue;
                 };
                 matched = true;
-                if let Some(cover) = cover {
-                    let url = format!("https://covers.openlibrary.org/b/id/{cover}-{size}.jpg");
-                    for id in requested {
-                        found.insert(id, url.clone());
-                    }
+                let url =
+                    cover.map(|cover| format!("https://covers.openlibrary.org/b/id/{cover}-{size}.jpg"));
+                for id in requested {
+                    outcome.answers.insert(id, url.clone());
                 }
             }
         }
@@ -69,10 +78,14 @@ pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Hash
         }
     }
 
-    found
+    for id in pending.into_values().flatten() {
+        outcome.answers.insert(id, None);
+    }
+    outcome
 }
 
-async fn search(isbns: &[&str], http: &reqwest::Client) -> Option<Vec<Value>> {
+/// On error, tells whether it counts as a provider failure.
+async fn search(isbns: &[&str], http: &reqwest::Client) -> Result<Vec<Value>, bool> {
     let query = format!("isbn:({})", isbns.join(" OR "));
     // An ISBN can match several works (duplicate records), hence the margin.
     let limit = (isbns.len() * 3).to_string();
@@ -93,26 +106,26 @@ async fn search(isbns: &[&str], http: &reqwest::Client) -> Option<Vec<Value>> {
         Ok(resp) => resp,
         Err(e) => {
             tracing::warn!(provider = "ol", error = %e, "request failed");
-            return None;
+            return Err(true);
         }
     };
     let status = resp.status();
     if !status.is_success() {
         tracing::warn!(provider = "ol", %status, "unexpected HTTP status");
-        return None;
+        return Err(is_provider_failure(status));
     }
     let mut json: Value = match resp.json().await {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(provider = "ol", error = %e, "unparseable response");
-            return None;
+            return Err(true);
         }
     };
     match json.get_mut("docs").map(Value::take) {
-        Some(Value::Array(docs)) => Some(docs),
+        Some(Value::Array(docs)) => Ok(docs),
         _ => {
             tracing::warn!(provider = "ol", "response has no docs array");
-            None
+            Err(true)
         }
     }
 }

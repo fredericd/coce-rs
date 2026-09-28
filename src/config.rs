@@ -65,6 +65,15 @@ pub struct Config {
     pub providers: Vec<String>,
     /// Global fetch timeout in milliseconds.
     pub timeout: u64,
+    /// Timeout (ms) of each HTTP request to a provider. Should stay below
+    /// `timeout`, so that a stuck provider shows up as a failure (and feeds
+    /// its circuit breaker) before the global timeout cuts the request.
+    #[serde(default = "default_provider_timeout", rename = "providerTimeout")]
+    pub provider_timeout: u64,
+    /// How long (seconds) a failing provider stays disabled before being
+    /// tried again.
+    #[serde(default = "default_provider_retry", rename = "providerRetry")]
+    pub provider_retry: u64,
     #[serde(default)]
     pub redis: RedisConfig,
     #[serde(default)]
@@ -79,12 +88,22 @@ pub struct Config {
     pub orb: Option<ProviderConfig>,
 }
 
+fn default_provider_timeout() -> u64 {
+    5000
+}
+
+fn default_provider_retry() -> u64 {
+    300
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             port: 8080,
             providers: vec!["aws".to_string(), "gb".to_string(), "ol".to_string()],
             timeout: 8000,
+            provider_timeout: default_provider_timeout(),
+            provider_retry: default_provider_retry(),
             redis: RedisConfig::default(),
             cache: None,
             gb: None,
@@ -136,6 +155,12 @@ impl Config {
         }
         if let Some(v) = env_u64("COCE_TIMEOUT") {
             self.timeout = v;
+        }
+        if let Some(v) = env_u64("COCE_PROVIDER_TIMEOUT") {
+            self.provider_timeout = v;
+        }
+        if let Some(v) = env_u64("COCE_PROVIDER_RETRY") {
+            self.provider_retry = v;
         }
 
         if let Some(v) = env_string("COCE_REDIS_HOST") {

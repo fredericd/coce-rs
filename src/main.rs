@@ -1,3 +1,4 @@
+mod breaker;
 mod config;
 mod error;
 mod fetcher;
@@ -7,6 +8,7 @@ mod redis_store;
 
 use std::io::IsTerminal;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
 /// Used when `RUST_LOG` is unset: Coce's own events at `info` and above,
@@ -36,19 +38,36 @@ async fn main() -> anyhow::Result<()> {
         config = %config_path,
         providers = ?cfg.providers,
         timeout_ms = cfg.timeout,
+        provider_timeout_ms = cfg.provider_timeout,
+        provider_retry_s = cfg.provider_retry,
         redis = %format!("{}:{}", cfg.redis.host, cfg.redis.port),
         local_cache = cfg.cache.is_some(),
         "configuration loaded"
     );
+    if cfg.provider_timeout >= cfg.timeout {
+        tracing::warn!(
+            provider_timeout_ms = cfg.provider_timeout,
+            timeout_ms = cfg.timeout,
+            "providerTimeout should be lower than timeout, otherwise stuck \
+             providers are cut by the global timeout and never disabled"
+        );
+    }
 
     let redis = redis_store::connect(&cfg.redis.host, cfg.redis.port).await?;
-    let http_client = reqwest::Client::builder().build()?;
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(cfg.provider_timeout))
+        .build()?;
+    let breakers = Arc::new(breaker::Breakers::new(
+        &cfg.providers,
+        Duration::from_secs(cfg.provider_retry),
+    ));
 
     let port = cfg.port;
     let state = http::AppState {
         config: cfg,
         redis,
         http: http_client,
+        breakers,
     };
 
     let app = http::router(state);

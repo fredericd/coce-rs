@@ -10,6 +10,7 @@ use std::time::Duration;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::breaker::Breakers;
 use crate::config::Config;
 use crate::error::AppError;
 use crate::fetcher;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub redis: RedisManager,
     pub http: reqwest::Client,
+    pub breakers: Arc<Breakers>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -71,7 +73,15 @@ async fn cover(State(state): State<AppState>, Query(q): Query<CoverQuery>) -> Re
         }
     }
 
-    let url_map = fetcher::fetch(&ids, &providers, &state.config, &state.redis, &state.http).await;
+    let url_map = fetcher::fetch(
+        &ids,
+        &providers,
+        &state.config,
+        &state.redis,
+        &state.http,
+        &state.breakers,
+    )
+    .await;
 
     let body: HashMap<String, serde_json::Value> = if q.all.is_some() {
         url_map

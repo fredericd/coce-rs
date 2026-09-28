@@ -2,6 +2,8 @@
   "port": "8080",
   "providers": ["gb","aws","ol","orb"],
   "timeout": 8000,
+  "providerTimeout": 5000,
+  "providerRetry": 300,
   "redis": {
     "host": "127.0.0.1",
     "port": 6379,
