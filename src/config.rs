@@ -77,6 +77,10 @@ pub struct Config {
     /// Maximum number of IDs accepted in a single /cover request.
     #[serde(default = "default_max_ids", rename = "maxIds")]
     pub max_ids: usize,
+    /// How long (seconds) a "no cover" answer stays cached. Covers found
+    /// are cached for their provider's `timeout`.
+    #[serde(default = "default_cache_ttl", rename = "notFoundTimeout")]
+    pub not_found_timeout: u64,
     /// Secret required by `/set` (as `Authorization: Bearer <token>`).
     /// `/set` is disabled when unset.
     #[serde(default, rename = "setToken")]
@@ -103,6 +107,11 @@ fn default_provider_retry() -> u64 {
     300
 }
 
+/// Cache duration (seconds) used when none is configured: one day.
+fn default_cache_ttl() -> u64 {
+    86_400
+}
+
 fn default_max_ids() -> usize {
     100
 }
@@ -116,6 +125,7 @@ impl Default for Config {
             provider_timeout: default_provider_timeout(),
             provider_retry: default_provider_retry(),
             max_ids: default_max_ids(),
+            not_found_timeout: default_cache_ttl(),
             set_token: None,
             redis: RedisConfig::default(),
             cache: None,
@@ -154,6 +164,25 @@ impl Config {
         }
     }
 
+    /// How long (seconds) a cover found by `provider` stays cached: its
+    /// `timeout`, or one day when unset. Redis rejects a zero duration, so
+    /// 0 (what a provider section without `timeout` gets) means unset too.
+    pub fn found_ttl(&self, provider: &str) -> u64 {
+        self.provider_config(provider)
+            .map(|c| c.timeout)
+            .filter(|t| *t > 0)
+            .unwrap_or_else(default_cache_ttl)
+    }
+
+    /// How long (seconds) a "no cover" answer stays cached.
+    pub fn not_found_ttl(&self) -> u64 {
+        if self.not_found_timeout > 0 {
+            self.not_found_timeout
+        } else {
+            default_cache_ttl()
+        }
+    }
+
     fn apply_env_overrides(&mut self) {
         if let Some(v) = env_u16("COCE_PORT") {
             self.port = v;
@@ -177,6 +206,9 @@ impl Config {
         }
         if let Some(v) = env_u64("COCE_MAX_IDS") {
             self.max_ids = v as usize;
+        }
+        if let Some(v) = env_u64("COCE_NOT_FOUND_TIMEOUT") {
+            self.not_found_timeout = v;
         }
         if let Some(v) = env_string("COCE_SET_TOKEN") {
             self.set_token = Some(v);
@@ -258,4 +290,26 @@ fn env_bool(name: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_ttls() {
+        let mut cfg = Config::default();
+        // Provider not configured, or configured without timeout.
+        assert_eq!(cfg.found_ttl("ol"), 86_400);
+        cfg.ol = Some(ProviderConfig::default());
+        assert_eq!(cfg.found_ttl("ol"), 86_400);
+        cfg.ol.as_mut().unwrap().timeout = 2_592_000;
+        assert_eq!(cfg.found_ttl("ol"), 2_592_000);
+
+        assert_eq!(cfg.not_found_ttl(), 86_400);
+        cfg.not_found_timeout = 3_600;
+        assert_eq!(cfg.not_found_ttl(), 3_600);
+        cfg.not_found_timeout = 0;
+        assert_eq!(cfg.not_found_ttl(), 86_400);
+    }
 }

@@ -31,7 +31,8 @@ async fn fetch_provider(
         ..
     } = state;
     let mut con = redis.clone();
-    let ttl = cfg.provider_config(provider).map(|c| c.timeout).unwrap_or(86_400);
+    let found_ttl = cfg.found_ttl(provider);
+    let not_found_ttl = cfg.not_found_ttl();
 
     let keys: Vec<String> = ids.iter().map(|id| format!("{provider}.{id}")).collect();
 
@@ -128,12 +129,12 @@ async fn fetch_provider(
                 } else {
                     remote_url.clone()
                 };
-                writes.push((key, stored_url.clone()));
+                writes.push((key, stored_url.clone(), found_ttl));
                 found.insert(id.clone(), stored_url);
             }
             Some(None) => {
                 // Remember the miss so we don't hit the provider again for a while.
-                writes.push((key, String::new()));
+                writes.push((key, String::new(), not_found_ttl));
             }
             // No reliable answer: nothing to remember.
             None => {}
@@ -155,7 +156,7 @@ async fn fetch_provider(
     tasks.spawn(async move {
         let result = tokio::time::timeout(
             Duration::from_millis(redis_timeout),
-            redis_store::set_many_ex(&mut con, &writes, ttl),
+            redis_store::set_many_ex(&mut con, &writes),
         )
         .await;
         match result {

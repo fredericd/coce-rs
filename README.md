@@ -48,6 +48,12 @@ By default `config.json` is read from the current directory; the
     failures](#provider-failures))
   * `providerRetry` - how long in seconds a failing provider stays disabled
     before Coce tries it again (default 300)
+  * `notFoundTimeout` - how long in seconds a "no cover" answer stays cached
+    (default 86400, one day). Covers found stay cached for their provider's
+    `timeout`. The two are independent: a found cover URL rarely changes
+    and can be kept long (e.g. 30 days, `2592000`), while a book without a
+    cover today, typically a new title, often gets one within days, so its
+    "no cover" answer is better kept short
   * `setToken` - secret required by `/set` (see [Forcing a cover
     URL](#forcing-a-cover-url-set)). `/set` is disabled when unset or empty
   * `maxIds` - maximum number of IDs accepted in a single `/cover` request
@@ -66,7 +72,8 @@ By default `config.json` is read from the current directory; the
     * `path` - path to the directory where images are cached locally
     * `url` - base url to the `path` directory
   * `gb` - Google Books parameters:
-     * `timeout` - timeout of the cached URL from Google Books
+     * `timeout` - how long in seconds a cover found by Google Books stays
+       cached (default 86400, one day, also when set to 0)
   * `ol` - Open Library parameters:
      * `timeout` - timeout of the cached URL from Open Library. After this
        delay, an URL is automatically removed from the cache, and so has to be
