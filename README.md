@@ -355,7 +355,7 @@ Example:
     "gb": { "state": "disabled", "retry_in_s": 300, "consecutive_failures": 3,
             "cache_hits": 0, "cache_misses": 5, "cache_hit_rate": 0.0,
             "calls": 3, "failures": 3, "skipped": 2, "covers_found": 0,
-            "avg_call_ms": 1003 },
+            "avg_call_ms": 1003, "min_call_ms": 1001, "max_call_ms": 1004 },
     ...
   },
   "redis": { "reachable": true, "latency_ms": 0, "keys": 8, "used_memory": "991.89K" }
@@ -371,7 +371,14 @@ Example:
   * `cache_hits` / `cache_misses` - IDs found in Redis (cover or cached "no
     cover") or not
   * `calls`, `failures`, `skipped` (calls not made because the provider was
-    disabled), `covers_found`, `avg_call_ms`
+    disabled), `covers_found`
+  * `avg_call_ms`, `min_call_ms`, `max_call_ms` - average, fastest and
+    slowest provider call since startup. A call covers all the IDs of a
+    request missing from the cache: one HTTP request for Google Books, one to
+    three for Open Library, one per ID for Amazon, whose calls therefore
+    grow with the number of IDs. A call cut by the global timeout lasts
+    about `timeout`. Requests served from the cache, and calls skipped while
+    the provider is disabled, aren't counted
 * `redis` - reachability, response time, total number of keys, memory used
 
 Counters are kept in memory, per Coce instance, and reset on restart

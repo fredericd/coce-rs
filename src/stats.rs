@@ -16,7 +16,6 @@ pub struct Stats {
     by_provider: HashMap<String, ProviderStats>,
 }
 
-#[derive(Default)]
 struct ProviderStats {
     cache_hits: AtomicU64,
     cache_misses: AtomicU64,
@@ -25,6 +24,25 @@ struct ProviderStats {
     skipped: AtomicU64,
     covers_found: AtomicU64,
     call_ms_total: AtomicU64,
+    /// `u64::MAX` until the first call.
+    call_ms_min: AtomicU64,
+    call_ms_max: AtomicU64,
+}
+
+impl Default for ProviderStats {
+    fn default() -> Self {
+        ProviderStats {
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
+            calls: AtomicU64::new(0),
+            failures: AtomicU64::new(0),
+            skipped: AtomicU64::new(0),
+            covers_found: AtomicU64::new(0),
+            call_ms_total: AtomicU64::new(0),
+            call_ms_min: AtomicU64::new(u64::MAX),
+            call_ms_max: AtomicU64::new(0),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -53,7 +71,12 @@ pub struct ProviderSnapshot {
     /// Calls not made because the provider was disabled by its breaker.
     pub skipped: u64,
     pub covers_found: u64,
+    /// Duration of a provider call (all the IDs of a request missing from
+    /// the cache): average, fastest and slowest since startup. Null before
+    /// any call.
     pub avg_call_ms: Option<u64>,
+    pub min_call_ms: Option<u64>,
+    pub max_call_ms: Option<u64>,
 }
 
 fn add(counter: &AtomicU64, n: u64) {
@@ -118,6 +141,8 @@ impl Stats {
             add(&p.failures, failed as u64);
             add(&p.covers_found, found as u64);
             add(&p.call_ms_total, elapsed_ms);
+            p.call_ms_min.fetch_min(elapsed_ms, Ordering::Relaxed);
+            p.call_ms_max.fetch_max(elapsed_ms, Ordering::Relaxed);
         }
     }
 
@@ -154,6 +179,8 @@ impl Stats {
             skipped: get(&p.skipped),
             covers_found: get(&p.covers_found),
             avg_call_ms: (calls > 0).then(|| get(&p.call_ms_total) / calls),
+            min_call_ms: (calls > 0).then(|| get(&p.call_ms_min)),
+            max_call_ms: (calls > 0).then(|| get(&p.call_ms_max)),
         })
     }
 }
@@ -167,6 +194,8 @@ mod tests {
         let s = Stats::new(&["gb".to_string()]);
         assert_eq!(s.provider("gb").unwrap().cache_hit_rate, None);
         assert_eq!(s.provider("gb").unwrap().avg_call_ms, None);
+        assert_eq!(s.provider("gb").unwrap().min_call_ms, None);
+        assert_eq!(s.provider("gb").unwrap().max_call_ms, None);
 
         s.cache_lookup("gb", 3, 1);
         s.provider_call("gb", false, 1, 100);
@@ -178,6 +207,8 @@ mod tests {
         assert_eq!(p.cache_hit_rate, Some(0.75));
         assert_eq!((p.calls, p.failures, p.skipped, p.covers_found), (2, 1, 1, 1));
         assert_eq!(p.avg_call_ms, Some(200));
+        assert_eq!(p.min_call_ms, Some(100));
+        assert_eq!(p.max_call_ms, Some(300));
         assert!(s.provider("xx").is_none());
     }
 }
