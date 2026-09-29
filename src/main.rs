@@ -3,6 +3,7 @@ mod config;
 mod error;
 mod fetcher;
 mod http;
+mod isbn;
 mod providers;
 mod redis_store;
 mod stats;

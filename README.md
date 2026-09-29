@@ -124,6 +124,11 @@ To get all cover images from Open Library (ol), Google Books (gb), and Amazon
 
     http://coce.server/cover?id=9780415480635,9780821417492,2847342257,9780563533191&provider=ol,gb,aws&all
 
+ISBNs can be given as ISBN-10 or ISBN-13, with or without hyphens: Coce
+looks each book up once, under its ISBN-13, and caches it under that form,
+so all spellings share one cache entry. Results are keyed by the IDs exactly
+as requested. IDs that aren't ISBNs are passed through unchanged.
+
 This request returns:
 
 ```json

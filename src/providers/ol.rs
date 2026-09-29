@@ -1,5 +1,6 @@
 use super::{is_provider_failure, Outcome};
 use crate::config::Config;
+use crate::isbn;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -30,7 +31,7 @@ pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Outc
     // end up in the Solr query.
     let mut pending: HashMap<String, Vec<String>> = HashMap::new();
     for id in ids {
-        match normalize_isbn(id) {
+        match isbn::normalize(id) {
             Some(isbn) => pending.entry(isbn).or_default().push(id.clone()),
             None => {
                 outcome.answers.insert(id.clone(), None);
@@ -133,45 +134,4 @@ async fn search(isbns: &[&str], http: &reqwest::Client) -> Result<Vec<Value>, bo
 /// The edition of a work that matched the query (there is at most one).
 fn matching_edition(work: &Value) -> Option<&Value> {
     work.get("editions")?.get("docs")?.as_array()?.first()
-}
-
-/// Strip hyphens/spaces and check the result looks like an ISBN-10/13, the
-/// form Open Library indexes them under.
-fn normalize_isbn(id: &str) -> Option<String> {
-    let isbn: String = id
-        .chars()
-        .filter(|c| *c != '-' && *c != ' ')
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-    if !isbn.is_ascii() {
-        return None;
-    }
-    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
-    let valid = match isbn.len() {
-        13 => digits(&isbn),
-        10 => digits(&isbn[..9]) && (digits(&isbn[9..]) || &isbn[9..] == "X"),
-        _ => false,
-    };
-    valid.then_some(isbn)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalizes_isbns() {
-        assert_eq!(normalize_isbn("978-0-563-53319-1").as_deref(), Some("9780563533191"));
-        assert_eq!(normalize_isbn("275403143x").as_deref(), Some("275403143X"));
-        assert_eq!(normalize_isbn("2847342257").as_deref(), Some("2847342257"));
-    }
-
-    #[test]
-    fn rejects_non_isbns() {
-        assert_eq!(normalize_isbn("12345"), None);
-        assert_eq!(normalize_isbn("97805635331X1"), None);
-        assert_eq!(normalize_isbn("isbn:(*)"), None);
-        assert_eq!(normalize_isbn("é12345678"), None);
-        assert_eq!(normalize_isbn("12345678é"), None);
-    }
 }

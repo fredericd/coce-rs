@@ -1,4 +1,5 @@
 use crate::http::AppState;
+use crate::isbn;
 use crate::providers;
 use crate::redis_store;
 use std::collections::{HashMap, HashSet};
@@ -228,12 +229,22 @@ pub async fn fetch(
 ) -> UrlMap {
     let cfg = &state.config;
     let deadline = tokio::time::Instant::now() + Duration::from_millis(cfg.timeout);
+
+    // Look each book up once, under its canonical ID (ISBN-13 for ISBNs),
+    // whatever the spellings it was requested under; the answer is given back
+    // under each requested spelling.
+    let mut requested_as: HashMap<String, Vec<String>> = HashMap::new();
+    for id in ids {
+        requested_as.entry(isbn::canonical(id)).or_default().push(id.clone());
+    }
+    let ids: Vec<String> = requested_as.keys().cloned().collect();
+
     let shared: Arc<Mutex<UrlMap>> = Arc::new(Mutex::new(HashMap::new()));
     let mut tasks = tokio::task::JoinSet::new();
 
     for provider in providers {
         let provider = provider.clone();
-        let ids = ids.to_vec();
+        let ids = ids.clone();
         let state = state.clone();
         let shared = shared.clone();
 
@@ -274,6 +285,12 @@ pub async fn fetch(
         state.tasks.spawn(async move { while tasks.join_next().await.is_some() {} });
     }
 
-    let result = shared.lock().await.clone();
+    let found = shared.lock().await.clone();
+    let mut result = UrlMap::new();
+    for (canonical, per_provider) in found {
+        for id in requested_as.remove(&canonical).unwrap_or_default() {
+            result.insert(id, per_provider.clone());
+        }
+    }
     result
 }

@@ -16,6 +16,7 @@ use crate::breaker::Breakers;
 use crate::config::Config;
 use crate::error::AppError;
 use crate::fetcher;
+use crate::isbn;
 use crate::redis_store::{self, RedisManager};
 use crate::stats::Stats;
 
@@ -154,7 +155,8 @@ async fn set(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<
     }
 
     let mut con = state.redis.clone();
-    let key = format!("{}.{}", q.provider, q.id);
+    // Same key as /cover lookups use.
+    let key = format!("{}.{}", q.provider, isbn::canonical(&q.id));
     let timeout_ms = state.config.redis.timeout;
     match tokio::time::timeout(
         Duration::from_millis(timeout_ms),
