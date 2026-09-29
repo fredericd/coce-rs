@@ -31,7 +31,7 @@ impl Default for RedisConfig {
         RedisConfig {
             host: "127.0.0.1".to_string(),
             port: 6379,
-            timeout: 5000,
+            timeout: 500,
         }
     }
 }

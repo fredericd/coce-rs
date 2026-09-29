@@ -55,9 +55,11 @@ By default `config.json` is read from the current directory; the
   * `redis` - Redis server parameters:
      * `host`
      * `port`
-     * `timeout` - timeout in milliseconds for Redis reads and writes. When
-       Redis is slow or down, Coce bypasses the cache and queries providers
-       directly instead of waiting
+     * `timeout` - timeout in milliseconds for Redis reads and writes
+       (default 500). When Redis is slow or down, Coce bypasses the cache and
+       queries providers directly instead of waiting. Every request pays this
+       delay while Redis doesn't answer, so keep it short: a Redis on the
+       same network answers in about a millisecond
   * `cache` - Local cache for images
     * `path` - path to the directory where images are cached locally
     * `url` - base url to the `path` directory
@@ -238,6 +240,26 @@ journalctl -u coce -f   # logs
 ```
 
 See [Logging](#logging) for log levels and formats.
+
+### Redis availability
+
+Redis is only a cache: if it goes down while Coce is running, Coce keeps
+answering, bypassing the cache and querying providers directly. Responses
+are slower and providers are queried more, but covers are still displayed.
+`/stats` reports it (`"redis": {"reachable": false}`), so it can be
+monitored. Coce reconnects on its own when Redis is back.
+
+For this degraded mode to stay short and cheap:
+
+* have Redis restarted automatically (`Restart=` in its systemd unit,
+  `restart:` in `docker-compose.yml`, which the provided one already does)
+* keep Redis persistence on (RDB snapshots, Redis' default, or AOF), so
+  that the cache survives a Redis restart instead of starting empty
+* keep `redis.timeout` short (see above)
+
+Caveat: Coce needs Redis at startup. If Redis is unreachable, Coce retries
+for a few seconds, then exits with an error; with `Restart=on-failure`
+systemd keeps restarting it until Redis is up.
 
 ### Docker
 
