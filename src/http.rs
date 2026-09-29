@@ -8,6 +8,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::task::TaskTracker;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -25,6 +26,9 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub breakers: Arc<Breakers>,
     pub stats: Arc<Stats>,
+    /// Background work (cache writes, providers finishing after the global
+    /// timeout, local image downloads), waited for on graceful shutdown.
+    pub tasks: TaskTracker,
 }
 
 pub fn router(state: AppState) -> Router {

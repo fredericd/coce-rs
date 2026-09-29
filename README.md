@@ -265,6 +265,15 @@ journalctl -u coce -f   # logs
 
 See [Logging](#logging) for log levels and formats.
 
+### Stopping Coce
+
+On SIGTERM (sent by `systemctl stop` and `docker stop`) or Ctrl-C, Coce
+stops accepting connections, finishes the requests in progress, then waits
+for its background work (cache writes, providers still running after the
+global timeout) for at most `timeout` before exiting. Keep the stop timeout
+of the service manager above `timeout`: systemd's default (90 s) is, Docker's
+(10 s) is too with the default `timeout` of 8 s.
+
 ### Redis availability
 
 Redis is only a cache: if it goes down while Coce is running, Coce keeps

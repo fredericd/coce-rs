@@ -1,4 +1,3 @@
-use crate::config::Config;
 use crate::http::AppState;
 use crate::providers;
 use crate::redis_store;
@@ -25,9 +24,10 @@ async fn fetch_provider(
     let AppState {
         config: cfg,
         redis,
-        http,
         breakers,
         stats,
+        tasks,
+        ..
     } = state;
     let mut con = redis.clone();
     let ttl = cfg.provider_config(provider).map(|c| c.timeout).unwrap_or(86_400);
@@ -96,7 +96,7 @@ async fn fetch_provider(
     }
 
     let started = Instant::now();
-    let outcome = providers::call(provider, &notcached, cfg, http, deadline).await;
+    let outcome = providers::call(provider, &notcached, cfg, &state.http, deadline).await;
     if outcome.failed {
         breakers.record_failure(provider);
     } else {
@@ -122,7 +122,7 @@ async fn fetch_provider(
         match outcome.answers.get(id) {
             Some(Some(remote_url)) => {
                 let stored_url = if cache_locally {
-                    cache_image_locally(provider, id, remote_url, cfg, http)
+                    cache_image_locally(provider, id, remote_url, state)
                         .unwrap_or_else(|| remote_url.clone())
                 } else {
                     remote_url.clone()
@@ -151,7 +151,7 @@ async fn fetch_provider(
     // stuck tasks.
     let redis_timeout = cfg.redis.timeout;
     let provider = provider.to_string();
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         let result = tokio::time::timeout(
             Duration::from_millis(redis_timeout),
             redis_store::set_many_ex(&mut con, &writes, ttl),
@@ -183,21 +183,15 @@ async fn publish(shared: &Mutex<UrlMap>, provider: &str, urls: HashMap<String, S
 
 /// Compute the local cache path/URL for an image and kick off the download in
 /// the background (the caller doesn't need to wait for the file to land).
-fn cache_image_locally(
-    provider: &str,
-    id: &str,
-    remote_url: &str,
-    cfg: &Config,
-    http: &reqwest::Client,
-) -> Option<String> {
-    let cache_cfg = cfg.cache.as_ref()?;
+fn cache_image_locally(provider: &str, id: &str, remote_url: &str, state: &AppState) -> Option<String> {
+    let cache_cfg = state.config.cache.as_ref()?;
     let dir = format!("{}/{}", cache_cfg.path, provider);
     let dest = format!("{dir}/{id}.jpg");
     let stored_url = format!("{}/{}/{}.jpg", cache_cfg.url, provider, id);
 
     let remote_url = remote_url.to_string();
-    let http = http.clone();
-    tokio::spawn(async move {
+    let http = state.http.clone();
+    state.tasks.spawn(async move {
         if let Err(e) = tokio::fs::create_dir_all(&dir).await {
             tracing::warn!(%dir, error = %e, "cannot create local cache directory");
             return;
@@ -261,8 +255,8 @@ pub async fn fetch(
         }
     };
 
-    tokio::select! {
-        _ = wait_all => {}
+    let timed_out = tokio::select! {
+        _ = wait_all => false,
         _ = tokio::time::sleep_until(deadline) => {
             let pending: Vec<&String> = providers.iter().filter(|p| !done.contains(*p)).collect();
             tracing::warn!(
@@ -271,9 +265,13 @@ pub async fn fetch(
                 "global timeout reached, returning partial results"
             );
             state.stats.global_timeout();
-            // Let pending providers finish and cache their answers.
-            tasks.detach_all();
+            true
         }
+    };
+    if timed_out {
+        // Let pending providers finish and cache their answers, as tracked
+        // background work, so that a graceful shutdown waits for them.
+        state.tasks.spawn(async move { while tasks.join_next().await.is_some() {} });
     }
 
     let result = shared.lock().await.clone();

@@ -10,6 +10,7 @@ mod stats;
 use std::io::IsTerminal;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::task::TaskTracker;
 use tracing_subscriber::EnvFilter;
 
 /// Used when `RUST_LOG` is unset: Coce's own events at `info` and above,
@@ -66,20 +67,64 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let stats = Arc::new(stats::Stats::new(&cfg.providers));
+    let tasks = TaskTracker::new();
 
     let port = cfg.port;
+    let shutdown_grace = Duration::from_millis(cfg.timeout);
     let state = http::AppState {
         config: cfg,
         redis,
         http: http_client,
         breakers,
         stats,
+        tasks: tasks.clone(),
     };
 
     let app = http::router(state);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     tracing::info!("coce listening on port {port}");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
+    // Requests are done; let background work (cache writes, providers
+    // finishing after the global timeout) complete, within bounds.
+    tasks.close();
+    if !tasks.is_empty() {
+        tracing::info!(pending = tasks.len(), "waiting for background tasks");
+    }
+    if tokio::time::timeout(shutdown_grace, tasks.wait()).await.is_err() {
+        tracing::warn!(pending = tasks.len(), "background tasks still running, exiting anyway");
+    }
+    tracing::info!("coce stopped");
     Ok(())
+}
+
+/// Resolves on Ctrl-C or SIGTERM (sent by systemd and Docker to stop the
+/// service): the server then stops accepting connections and finishes the
+/// requests in progress.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot listen for SIGTERM");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    tracing::info!("shutdown requested, finishing requests in progress");
 }
