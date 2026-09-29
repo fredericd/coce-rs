@@ -72,8 +72,8 @@ By default `config.json` is read from the current directory; the
      records share the same ISBN, Open Library's search returns only one of
      them, so a cover attached to another duplicate record is missed.
   * `aws` - Amazon
-     * `imageSize` - size of images: SmallImage, MediumImage, LargeImage
-     * `timeout` - timeout when probing images url via direct http requests
+     * `timeout` - timeout of the cached URL from Amazon, in seconds (same
+       meaning as for Open Library). Images are always medium-sized
 
      Amazon image URLs are keyed by ISBN-10 or ASIN. A 979-prefixed ISBN-13
      has no ISBN-10 equivalent, and its ASIN can't be derived from it, so
@@ -86,7 +86,8 @@ By default `config.json` is read from the current directory; the
      * `user` - user to access ORB API
      * `key` - API key
      * `cache` - true/false, are images locally cached (and served)
-     * `timeout` - timeout when probing images url via direct http requests
+     * `timeout` - timeout of the cached URL from ORB, in seconds (same
+       meaning as for Open Library)
 
 ### Provider failures
 

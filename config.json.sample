@@ -17,8 +17,7 @@
     "timeout": 86400
   },
   "aws": {
-    "timeout": 86400,
-    "imageSize": "MediumSize"
+    "timeout": 86400
   },
   "ol": {
     "timeout": 86400,
