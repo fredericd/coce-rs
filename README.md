@@ -74,6 +74,14 @@ By default `config.json` is read from the current directory; the
   * `aws` - Amazon
      * `imageSize` - size of images: SmallImage, MediumImage, LargeImage
      * `timeout` - timeout when probing images url via direct http requests
+
+     Amazon image URLs are keyed by ISBN-10 or ASIN. A 979-prefixed ISBN-13
+     has no ISBN-10 equivalent, and its ASIN can't be derived from it, so
+     Amazon is never queried for these ISBNs (it would return the cover of an
+     unrelated book). 979-prefixed ISBNs are increasingly common, as the 978
+     range runs out (France uses 979-10, the US 979-8): always list other
+     providers after `aws`, e.g. `aws,gb,ol`, so they can supply those
+     covers.
   * `orb` - ORB
      * `user` - user to access ORB API
      * `key` - API key
