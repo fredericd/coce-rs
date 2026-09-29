@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -13,6 +14,17 @@ pub struct Breakers {
     start: Instant,
     retry: Duration,
     by_provider: HashMap<String, Breaker>,
+}
+
+/// Read-only view of a breaker, for `/stats`.
+#[derive(Serialize)]
+pub struct BreakerSnapshot {
+    /// "enabled", "disabled", or "retrying" (retry delay elapsed, the next
+    /// request tests the provider).
+    pub state: &'static str,
+    /// Seconds until the provider is tried again, while disabled.
+    pub retry_in_s: Option<u64>,
+    pub consecutive_failures: u32,
 }
 
 #[derive(Default)]
@@ -88,6 +100,22 @@ impl Breakers {
         }
     }
 
+    pub fn snapshot(&self, provider: &str) -> Option<BreakerSnapshot> {
+        let b = self.by_provider.get(provider)?;
+        let until = b.open_until.load(Ordering::Acquire);
+        let now = self.now_ms();
+        let (state, retry_in_s) = match until {
+            0 => ("enabled", None),
+            _ if now < until => ("disabled", Some((until - now).div_ceil(1000))),
+            _ => ("retrying", None),
+        };
+        Some(BreakerSnapshot {
+            state,
+            retry_in_s,
+            consecutive_failures: b.consecutive_failures.load(Ordering::Acquire),
+        })
+    }
+
     /// Never 0, which `open_until` reserves for "closed".
     fn now_ms(&self) -> u64 {
         self.start.elapsed().as_millis() as u64 + 1
@@ -150,6 +178,21 @@ mod tests {
         assert!(!b.allow("gb"));
         b.record_success("gb");
         assert!(b.allow("gb"));
+    }
+
+    #[test]
+    fn snapshot_reflects_state() {
+        let b = breakers(Duration::from_secs(300));
+        let s = b.snapshot("gb").unwrap();
+        assert_eq!((s.state, s.retry_in_s, s.consecutive_failures), ("enabled", None, 0));
+        for _ in 0..FAILURE_THRESHOLD {
+            b.record_failure("gb");
+        }
+        let s = b.snapshot("gb").unwrap();
+        assert_eq!((s.state, s.retry_in_s, s.consecutive_failures), ("disabled", Some(300), 3));
+        b.by_provider["gb"].open_until.store(1, Ordering::Release);
+        assert_eq!(b.snapshot("gb").unwrap().state, "retrying");
+        assert!(b.snapshot("xx").is_none());
     }
 
     #[test]

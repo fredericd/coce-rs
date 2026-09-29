@@ -266,6 +266,64 @@ docker run -p 8080:8080 \
   coce
 ```
 
+## Monitoring
+
+`/stats` returns activity counters, provider state and Redis figures, as
+JSON. It requires no authentication: when Coce runs behind a reverse proxy,
+restrict it there if needed (it reveals the configuration and traffic
+volume, but no credentials).
+
+Example:
+
+```json
+{
+  "version": "0.1.0",
+  "started_at": 1790704415,
+  "uptime_s": 3,
+  "config": { "providers": ["aws", "gb", "ol"], "timeout_ms": 8000,
+              "provider_timeout_ms": 5000, "provider_retry_s": 300,
+              "max_ids": 100, "redis": "127.0.0.1:6379", "local_cache": false },
+  "requests": { "cover": 7, "rejected": 2, "ids": 5, "global_timeouts": 0 },
+  "providers": {
+    "gb": { "state": "disabled", "retry_in_s": 300, "consecutive_failures": 3,
+            "cache_hits": 0, "cache_misses": 5, "cache_hit_rate": 0.0,
+            "calls": 3, "failures": 3, "skipped": 2, "covers_found": 0,
+            "avg_call_ms": 1003 },
+    ...
+  },
+  "redis": { "reachable": true, "latency_ms": 0, "keys": 8, "used_memory": "991.89K" }
+}
+```
+
+* `requests` - `/cover` requests received, rejected with a 400, IDs
+  requested, requests answered at the global timeout with partial results
+* `providers` - per provider:
+  * `state` - `enabled`, `disabled` (by its circuit breaker, see [Provider
+    failures](#provider-failures); `retry_in_s` tells when it will be tried
+    again) or `retrying` (the next request tests it)
+  * `cache_hits` / `cache_misses` - IDs found in Redis (cover or cached "no
+    cover") or not
+  * `calls`, `failures`, `skipped` (calls not made because the provider was
+    disabled), `covers_found`, `avg_call_ms`
+* `redis` - reachability, response time, total number of keys, memory used
+
+Counters are kept in memory, per Coce instance, and reset on restart
+(`started_at` is a Unix timestamp). `redis.keys` counts (provider, ID)
+pairs, including cached "no cover" answers, and any other key in the same
+Redis database: an ISBN cached for three providers counts three times.
+Counting cached covers per provider would require scanning every key, which
+is too expensive on a large cache to be done on each call.
+
+Example NGINX configuration, keeping `/stats` internal:
+
+```nginx
+location = /stats {
+    allow 10.0.0.0/8;
+    deny all;
+    proxy_pass http://127.0.0.1:8080;
+}
+```
+
 ## Logging
 
 Coce writes its logs to stdout, one event per line. With the default settings
@@ -375,6 +433,7 @@ production, stick with the default level.
   providers in parallel, enforces a global timeout, writes results (and
   misses) back to Redis
 - `breaker.rs` — per-provider circuit breaker (lock-free atomics)
-- `http.rs` — Axum routes (`/`, `/cover`, `/set`)
+- `http.rs` — Axum routes (`/`, `/cover`, `/set`, `/stats`)
+- `stats.rs` — in-memory activity counters for `/stats` (lock-free atomics)
 - `error.rs` — HTTP errors (JSON `{"error": ...}` responses)
 

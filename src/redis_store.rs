@@ -44,3 +44,21 @@ pub async fn set_ex(
 ) -> redis::RedisResult<()> {
     con.set_ex(key, value, ttl_seconds).await
 }
+
+pub async fn ping(con: &mut ConnectionManager) -> redis::RedisResult<()> {
+    redis::cmd("PING").query_async::<String>(con).await.map(|_| ())
+}
+
+/// Number of keys in the current database (constant time, no scan).
+pub async fn dbsize(con: &mut ConnectionManager) -> redis::RedisResult<u64> {
+    redis::cmd("DBSIZE").query_async(con).await
+}
+
+/// Memory used by Redis, human-readable (`used_memory_human` from INFO).
+pub async fn used_memory(con: &mut ConnectionManager) -> redis::RedisResult<Option<String>> {
+    let info: String = redis::cmd("INFO").arg("memory").query_async(con).await?;
+    Ok(info
+        .lines()
+        .find_map(|l| l.strip_prefix("used_memory_human:"))
+        .map(|v| v.trim().to_string()))
+}

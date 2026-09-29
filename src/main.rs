@@ -5,6 +5,7 @@ mod fetcher;
 mod http;
 mod providers;
 mod redis_store;
+mod stats;
 
 use std::io::IsTerminal;
 use std::sync::Arc;
@@ -63,12 +64,15 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_secs(cfg.provider_retry),
     ));
 
+    let stats = Arc::new(stats::Stats::new(&cfg.providers));
+
     let port = cfg.port;
     let state = http::AppState {
         config: cfg,
         redis,
         http: http_client,
         breakers,
+        stats,
     };
 
     let app = http::router(state);

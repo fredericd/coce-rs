@@ -27,6 +27,7 @@ async fn fetch_provider(
         redis,
         http,
         breakers,
+        stats,
     } = state;
     let mut con = redis.clone();
     let ttl = cfg.provider_config(provider).map(|c| c.timeout).unwrap_or(86_400);
@@ -78,6 +79,7 @@ async fn fetch_provider(
         cache_misses = notcached.len(),
         "cache lookup"
     );
+    stats.cache_lookup(provider, ids.len() - notcached.len(), notcached.len());
 
     // Publish cached URLs right away: if the provider call below runs past
     // the global timeout, they still make it into the response.
@@ -89,6 +91,7 @@ async fn fetch_provider(
 
     if !breakers.allow(provider) {
         tracing::debug!(provider, skipped = notcached.len(), "provider disabled, skipped");
+        stats.provider_skipped(provider);
         return;
     }
 
@@ -99,13 +102,16 @@ async fn fetch_provider(
     } else {
         breakers.record_success(provider);
     }
+    let covers_found = outcome.answers.values().filter(|url| url.is_some()).count();
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    stats.provider_call(provider, outcome.failed, covers_found, elapsed_ms);
     tracing::debug!(
         provider,
         queried = notcached.len(),
         answered = outcome.answers.len(),
-        found = outcome.answers.values().filter(|url| url.is_some()).count(),
+        found = covers_found,
         failed = outcome.failed,
-        elapsed_ms = started.elapsed().as_millis() as u64,
+        elapsed_ms,
         "provider fetched"
     );
     let cache_locally = cfg.provider_config(provider).map(|c| c.cache).unwrap_or(false);
@@ -264,6 +270,7 @@ pub async fn fetch(
                 ?pending,
                 "global timeout reached, returning partial results"
             );
+            state.stats.global_timeout();
             // Let pending providers finish and cache their answers.
             tasks.detach_all();
         }

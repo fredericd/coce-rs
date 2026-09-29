@@ -15,6 +15,7 @@ use crate::config::Config;
 use crate::error::AppError;
 use crate::fetcher;
 use crate::redis_store::{self, RedisManager};
+use crate::stats::Stats;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -22,6 +23,7 @@ pub struct AppState {
     pub redis: RedisManager,
     pub http: reqwest::Client,
     pub breakers: Arc<Breakers>,
+    pub stats: Arc<Stats>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -29,6 +31,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(index))
         .route("/cover", get(cover))
         .route("/set", get(set))
+        .route("/stats", get(stats))
         .with_state(state)
         // Coce is meant to be called from browser JS running on whatever
         // site embeds the cover images (a different origin than Coce
@@ -52,17 +55,24 @@ struct CoverQuery {
     callback: Option<String>,
 }
 
+/// Count a rejected `/cover` request and build its 400 response.
+fn reject(state: &AppState, error: AppError) -> Response {
+    state.stats.rejected();
+    error.into_response()
+}
+
 async fn cover(State(state): State<AppState>, Query(q): Query<CoverQuery>) -> Response {
+    state.stats.cover_request();
     let ids_raw = match q.id {
         Some(v) if v.len() >= 8 => v,
-        _ => return AppError::MissingId.into_response(),
+        _ => return reject(&state, AppError::MissingId),
     };
     let ids: Vec<String> = ids_raw.split(',').map(str::to_string).collect();
     if ids.is_empty() {
-        return AppError::BadId.into_response();
+        return reject(&state, AppError::BadId);
     }
     if ids.len() > state.config.max_ids {
-        return AppError::TooManyIds(state.config.max_ids).into_response();
+        return reject(&state, AppError::TooManyIds(state.config.max_ids));
     }
 
     let providers: Vec<String> = match q.provider {
@@ -72,10 +82,11 @@ async fn cover(State(state): State<AppState>, Query(q): Query<CoverQuery>) -> Re
 
     for p in &providers {
         if !state.config.providers.contains(p) {
-            return AppError::UnavailableProvider(p.clone()).into_response();
+            return reject(&state, AppError::UnavailableProvider(p.clone()));
         }
     }
 
+    state.stats.ids_requested(ids.len());
     let url_map = fetcher::fetch(&ids, &providers, &state).await;
 
     let body: HashMap<String, serde_json::Value> = if q.all.is_some() {
@@ -129,4 +140,67 @@ async fn set(State(state): State<AppState>, Query(q): Query<SetQuery>) -> Respon
         Err(_) => tracing::warn!(%key, timeout_ms, "redis write timed out"),
     }
     Json(serde_json::json!({ "success": true })).into_response()
+}
+
+/// Activity counters, provider and breaker state, Redis figures. Counters
+/// are per process and reset on restart. Redis figures only use
+/// constant-time commands (no key scan), so this stays cheap on a large
+/// cache.
+async fn stats(State(state): State<AppState>) -> Response {
+    let cfg = &state.config;
+
+    let providers: serde_json::Map<String, serde_json::Value> = cfg
+        .providers
+        .iter()
+        .map(|p| {
+            let mut entry = serde_json::to_value(state.breakers.snapshot(p)).unwrap();
+            if let (Some(obj), Ok(serde_json::Value::Object(counters))) =
+                (entry.as_object_mut(), serde_json::to_value(state.stats.provider(p)))
+            {
+                obj.extend(counters);
+            }
+            (p.clone(), entry)
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "started_at": state.stats.started_at(),
+        "uptime_s": state.stats.uptime_s(),
+        "config": {
+            "providers": cfg.providers,
+            "timeout_ms": cfg.timeout,
+            "provider_timeout_ms": cfg.provider_timeout,
+            "provider_retry_s": cfg.provider_retry,
+            "max_ids": cfg.max_ids,
+            "redis": format!("{}:{}", cfg.redis.host, cfg.redis.port),
+            "local_cache": cfg.cache.is_some(),
+        },
+        "requests": state.stats.requests(),
+        "providers": providers,
+        "redis": redis_stats(&state).await,
+    }))
+    .into_response()
+}
+
+async fn redis_stats(state: &AppState) -> serde_json::Value {
+    let mut con = state.redis.clone();
+    let timeout = Duration::from_millis(state.config.redis.timeout);
+    let started = std::time::Instant::now();
+    let figures = async {
+        redis_store::ping(&mut con).await?;
+        let latency_ms = started.elapsed().as_millis() as u64;
+        let keys = redis_store::dbsize(&mut con).await?;
+        let used_memory = redis_store::used_memory(&mut con).await?;
+        Ok::<_, redis::RedisError>((latency_ms, keys, used_memory))
+    };
+    match tokio::time::timeout(timeout, figures).await {
+        Ok(Ok((latency_ms, keys, used_memory))) => serde_json::json!({
+            "reachable": true,
+            "latency_ms": latency_ms,
+            "keys": keys,
+            "used_memory": used_memory,
+        }),
+        _ => serde_json::json!({ "reachable": false }),
+    }
 }
