@@ -345,7 +345,7 @@ Example:
 ```json
 {
   "version": "0.1.0",
-  "started_at": 1790704415,
+  "started_at": "2026-09-29T20:33:35+02:00",
   "uptime_s": 3,
   "config": { "providers": ["aws", "gb", "ol"], "timeout_ms": 8000,
               "provider_timeout_ms": 5000, "provider_retry_s": 300,
@@ -382,7 +382,7 @@ Example:
 * `redis` - reachability, response time, total number of keys, memory used
 
 Counters are kept in memory, per Coce instance, and reset on restart
-(`started_at` is a Unix timestamp). `redis.keys` counts (provider, ID)
+(`started_at` is in the server's local time, with its UTC offset). `redis.keys` counts (provider, ID)
 pairs, including cached "no cover" answers, and any other key in the same
 Redis database: an ISBN cached for three providers counts three times.
 Counting cached covers per provider would require scanning every key, which

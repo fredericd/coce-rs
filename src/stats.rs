@@ -1,14 +1,15 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use chrono::{DateTime, Local, SecondsFormat};
+use std::time::Instant;
 
 /// In-memory activity counters, exposed by `/stats`. They are per process
 /// and reset on restart (`uptime_s` gives the context). Only atomics, so
 /// counting costs no lock on the request path.
 pub struct Stats {
     started: Instant,
-    started_at: u64,
+    started_at: DateTime<Local>,
     requests: AtomicU64,
     rejected: AtomicU64,
     ids: AtomicU64,
@@ -91,10 +92,7 @@ impl Stats {
     pub fn new(providers: &[String]) -> Self {
         Stats {
             started: Instant::now(),
-            started_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            started_at: Local::now(),
             requests: AtomicU64::new(0),
             rejected: AtomicU64::new(0),
             ids: AtomicU64::new(0),
@@ -146,9 +144,10 @@ impl Stats {
         }
     }
 
-    /// Unix timestamp (seconds) of the process start.
-    pub fn started_at(&self) -> u64 {
-        self.started_at
+    /// Process start, as RFC 3339 in the server's local time with its UTC
+    /// offset, e.g. `2026-09-29T20:32:10+02:00`.
+    pub fn started_at(&self) -> String {
+        self.started_at.to_rfc3339_opts(SecondsFormat::Secs, false)
     }
 
     pub fn uptime_s(&self) -> u64 {
