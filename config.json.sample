@@ -4,6 +4,7 @@
   "timeout": 8000,
   "providerTimeout": 5000,
   "providerRetry": 300,
+  "maxIds": 100,
   "redis": {
     "host": "127.0.0.1",
     "port": 6379,

@@ -74,6 +74,9 @@ pub struct Config {
     /// tried again.
     #[serde(default = "default_provider_retry", rename = "providerRetry")]
     pub provider_retry: u64,
+    /// Maximum number of IDs accepted in a single /cover request.
+    #[serde(default = "default_max_ids", rename = "maxIds")]
+    pub max_ids: usize,
     #[serde(default)]
     pub redis: RedisConfig,
     #[serde(default)]
@@ -96,6 +99,10 @@ fn default_provider_retry() -> u64 {
     300
 }
 
+fn default_max_ids() -> usize {
+    100
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -104,6 +111,7 @@ impl Default for Config {
             timeout: 8000,
             provider_timeout: default_provider_timeout(),
             provider_retry: default_provider_retry(),
+            max_ids: default_max_ids(),
             redis: RedisConfig::default(),
             cache: None,
             gb: None,
@@ -161,6 +169,9 @@ impl Config {
         }
         if let Some(v) = env_u64("COCE_PROVIDER_RETRY") {
             self.provider_retry = v;
+        }
+        if let Some(v) = env_u64("COCE_MAX_IDS") {
+            self.max_ids = v as usize;
         }
 
         if let Some(v) = env_string("COCE_REDIS_HOST") {

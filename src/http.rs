@@ -61,6 +61,9 @@ async fn cover(State(state): State<AppState>, Query(q): Query<CoverQuery>) -> Re
     if ids.is_empty() {
         return AppError::BadId.into_response();
     }
+    if ids.len() > state.config.max_ids {
+        return AppError::TooManyIds(state.config.max_ids).into_response();
+    }
 
     let providers: Vec<String> = match q.provider {
         Some(p) => p.split(',').map(str::to_string).collect(),

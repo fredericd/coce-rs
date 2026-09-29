@@ -7,6 +7,7 @@ pub enum AppError {
     MissingId,
     BadId,
     UnavailableProvider(String),
+    TooManyIds(usize),
 }
 
 impl IntoResponse for AppError {
@@ -15,6 +16,7 @@ impl IntoResponse for AppError {
             AppError::MissingId => "ID parameter is missing".to_string(),
             AppError::BadId => "Bad id parameter".to_string(),
             AppError::UnavailableProvider(p) => format!("Unavailable provider: {p}"),
+            AppError::TooManyIds(max) => format!("Too many IDs, maximum is {max}"),
         };
         (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
     }

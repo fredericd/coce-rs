@@ -40,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
         timeout_ms = cfg.timeout,
         provider_timeout_ms = cfg.provider_timeout,
         provider_retry_s = cfg.provider_retry,
+        max_ids = cfg.max_ids,
         redis = %format!("{}:{}", cfg.redis.host, cfg.redis.port),
         local_cache = cfg.cache.is_some(),
         "configuration loaded"

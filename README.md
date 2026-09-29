@@ -48,6 +48,10 @@ By default `config.json` is read from the current directory; the
     failures](#provider-failures))
   * `providerRetry` - how long in seconds a failing provider stays disabled
     before Coce tries it again (default 300)
+  * `maxIds` - maximum number of IDs accepted in a single `/cover` request
+    (default 100). Above it, Coce answers `400` with
+    `{"error": "Too many IDs, maximum is 100"}` rather than silently
+    dropping IDs: the client should split its request
   * `redis` - Redis server parameters:
      * `host`
      * `port`
