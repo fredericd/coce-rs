@@ -159,16 +159,29 @@ See `sample-client.html` in `client-sample` directory for a Coce sample usage
 from JavaScript. It uses `coceclient.js` module, which is use like this:
 
 ```javascript
-// isbns is an array of ISBNs
-var coceClient = new CoceClient('http://coceserver.com:8080', 'ol,aws,gb');
-coceClient.fetch(isbns, function(isbn, url) {
-  $('#isbn_'+isbn).html('<img src="+url)+'"");
-});
+document.addEventListener('DOMContentLoaded', () => {
+  const ids = [...document.querySelectorAll('[id^="coce-thumbnail"]')].map(
+    (el) => el.dataset.id,
+  );
+  if (ids.length === 0) return;
 
+  const client = new CoceClient('http://localhost:8080', 'ol,gb,aws');
+  client
+    .fetch(ids, (id, url) => {
+      for (const el of document.querySelectorAll(`[data-id="${id}"]`)) {
+        const img = document.createElement('img');
+        img.src = url;
+        img.title = url;
+        el.append(img);
+      }
+    })
+    .catch((err) => console.error('coce fetch failed:', err));
+});
+```
 
 ## Performance
 
-__coce__ is highly scalable. With all requested URLs in cache, ``ab`` test,
+__Coce__ is highly scalable. With all requested URLs in cache, ``ab`` test,
 10000 requests, with 50 concurrent requests:
 
 ab -n 10000 -c 50 http://localhost:8080/cover?id=9780415480635,978081417492,2847342257,9780563533191&provider=gb,aws
