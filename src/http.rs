@@ -73,15 +73,7 @@ async fn cover(State(state): State<AppState>, Query(q): Query<CoverQuery>) -> Re
         }
     }
 
-    let url_map = fetcher::fetch(
-        &ids,
-        &providers,
-        &state.config,
-        &state.redis,
-        &state.http,
-        &state.breakers,
-    )
-    .await;
+    let url_map = fetcher::fetch(&ids, &providers, &state).await;
 
     let body: HashMap<String, serde_json::Value> = if q.all.is_some() {
         url_map

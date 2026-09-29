@@ -1,7 +1,7 @@
-use crate::breaker::Breakers;
 use crate::config::Config;
+use crate::http::AppState;
 use crate::providers;
-use crate::redis_store::{self, RedisManager};
+use crate::redis_store;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,11 +18,16 @@ pub type UrlMap = HashMap<String, HashMap<String, String>>;
 async fn fetch_provider(
     provider: &str,
     ids: &[String],
-    cfg: &Config,
-    redis: &RedisManager,
-    http: &reqwest::Client,
-    breakers: &Breakers,
-) -> HashMap<String, String> {
+    state: &AppState,
+    deadline: tokio::time::Instant,
+    shared: &Mutex<UrlMap>,
+) {
+    let AppState {
+        config: cfg,
+        redis,
+        http,
+        breakers,
+    } = state;
     let mut con = redis.clone();
     let ttl = cfg.provider_config(provider).map(|c| c.timeout).unwrap_or(86_400);
 
@@ -74,17 +79,21 @@ async fn fetch_provider(
         "cache lookup"
     );
 
+    // Publish cached URLs right away: if the provider call below runs past
+    // the global timeout, they still make it into the response.
+    publish(shared, provider, std::mem::take(&mut found)).await;
+
     if notcached.is_empty() {
-        return found;
+        return;
     }
 
     if !breakers.allow(provider) {
         tracing::debug!(provider, skipped = notcached.len(), "provider disabled, skipped");
-        return found;
+        return;
     }
 
     let started = Instant::now();
-    let outcome = providers::call(provider, &notcached, cfg, http).await;
+    let outcome = providers::call(provider, &notcached, cfg, http, deadline).await;
     if outcome.failed {
         breakers.record_failure(provider);
     } else {
@@ -124,8 +133,10 @@ async fn fetch_provider(
         }
     }
 
+    publish(shared, provider, found).await;
+
     if writes.is_empty() {
-        return found;
+        return;
     }
 
     // Don't make the client wait for the cache to be filled: write in the
@@ -151,8 +162,17 @@ async fn fetch_provider(
             ),
         }
     });
+}
 
-    found
+/// Add `provider`'s URLs to the response being built.
+async fn publish(shared: &Mutex<UrlMap>, provider: &str, urls: HashMap<String, String>) {
+    if urls.is_empty() {
+        return;
+    }
+    let mut guard = shared.lock().await;
+    for (id, url) in urls {
+        guard.entry(id).or_default().insert(provider.to_string(), url);
+    }
 }
 
 /// Compute the local cache path/URL for an image and kick off the download in
@@ -196,33 +216,29 @@ fn cache_image_locally(
 /// Fetch cover URLs for `ids` from each of `providers`, in parallel, giving
 /// up after `cfg.timeout` milliseconds and returning whatever was found so
 /// far (mirrors the original Node fetcher's "best effort within a deadline"
-/// behaviour).
+/// behaviour). Providers still running at that point are not aborted: they
+/// finish in the background and cache what they got, so that the work isn't
+/// lost and a later request for the same IDs gets further. This stays
+/// bounded: per-ID providers stop at the deadline, and every HTTP request is
+/// bounded by `providerTimeout`.
 pub async fn fetch(
     ids: &[String],
     providers: &[String],
-    cfg: &Arc<Config>,
-    redis: &RedisManager,
-    http: &reqwest::Client,
-    breakers: &Arc<Breakers>,
+    state: &AppState,
 ) -> UrlMap {
+    let cfg = &state.config;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(cfg.timeout);
     let shared: Arc<Mutex<UrlMap>> = Arc::new(Mutex::new(HashMap::new()));
     let mut tasks = tokio::task::JoinSet::new();
 
     for provider in providers {
         let provider = provider.clone();
         let ids = ids.to_vec();
-        let cfg = cfg.clone();
-        let redis = redis.clone();
-        let http = http.clone();
-        let breakers = breakers.clone();
+        let state = state.clone();
         let shared = shared.clone();
 
         tasks.spawn(async move {
-            let result = fetch_provider(&provider, &ids, &cfg, &redis, &http, &breakers).await;
-            let mut guard = shared.lock().await;
-            for (id, url) in result {
-                guard.entry(id).or_default().insert(provider.clone(), url);
-            }
+            fetch_provider(&provider, &ids, &state, deadline, &shared).await;
             provider
         });
     }
@@ -241,13 +257,15 @@ pub async fn fetch(
 
     tokio::select! {
         _ = wait_all => {}
-        _ = tokio::time::sleep(Duration::from_millis(cfg.timeout)) => {
+        _ = tokio::time::sleep_until(deadline) => {
             let pending: Vec<&String> = providers.iter().filter(|p| !done.contains(*p)).collect();
             tracing::warn!(
                 timeout_ms = cfg.timeout,
                 ?pending,
                 "global timeout reached, returning partial results"
             );
+            // Let pending providers finish and cache their answers.
+            tasks.detach_all();
         }
     }
 

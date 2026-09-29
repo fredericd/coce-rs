@@ -5,6 +5,7 @@ pub mod orb;
 
 use crate::config::Config;
 use std::collections::HashMap;
+use tokio::time::Instant;
 
 /// What a provider call learned about the requested IDs.
 #[derive(Default)]
@@ -54,10 +55,18 @@ pub(crate) fn is_provider_failure(status: reqwest::StatusCode) -> bool {
     status != reqwest::StatusCode::BAD_REQUEST
 }
 
-/// Dispatch a fetch to the named provider.
-pub async fn call(provider: &str, ids: &[String], cfg: &Config, http: &reqwest::Client) -> Outcome {
+/// Dispatch a fetch to the named provider. `deadline` is when the client
+/// gets its response anyway (global timeout): providers issuing one request
+/// per ID stop there and return what they have, so it can be cached.
+pub async fn call(
+    provider: &str,
+    ids: &[String],
+    cfg: &Config,
+    http: &reqwest::Client,
+    deadline: Instant,
+) -> Outcome {
     match provider {
-        "aws" => aws::fetch(ids, http).await,
+        "aws" => aws::fetch(ids, cfg, http, deadline).await,
         "gb" => gb::fetch(ids, http).await,
         "ol" => ol::fetch(ids, cfg, http).await,
         "orb" => orb::fetch(ids, cfg, http).await,

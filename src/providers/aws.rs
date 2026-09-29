@@ -1,5 +1,7 @@
 use super::Outcome;
+use crate::config::Config;
 use std::time::Duration;
+use tokio::time::Instant;
 
 /// Amazon has no public cover-lookup API; instead we probe the predictable
 /// direct image URL with a HEAD request. A 200 or 403 both mean the image
@@ -15,7 +17,11 @@ use std::time::Duration;
 /// On a network error, throttling (429) or server error (5xx), the remaining
 /// IDs are left unanswered rather than probed anyway: they would most likely
 /// fail the same way, each one adding to the response time.
-pub async fn fetch(ids: &[String], http: &reqwest::Client) -> Outcome {
+///
+/// IDs are probed one by one, so a large batch can take longer than the
+/// global timeout. Probing stops at `deadline`: the IDs probed so far are
+/// answered (and cached), the rest are left for a later request.
+pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client, deadline: Instant) -> Outcome {
     let mut outcome = Outcome::default();
 
     let mut keys: Vec<(&String, String)> = Vec::with_capacity(ids.len());
@@ -28,7 +34,13 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> Outcome {
         }
     }
 
+    let provider_timeout = Duration::from_millis(cfg.provider_timeout);
     for (idx, (id, search)) in keys.iter().enumerate() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            tracing::debug!(provider = "aws", unanswered = keys.len() - idx, "deadline reached");
+            break;
+        }
         let url = format!(
             "https://images-na.ssl-images-amazon.com/images/P/{search}.01.MZZZZZZZZZ.jpg"
         );
@@ -36,6 +48,7 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> Outcome {
         match http
             .head(&url)
             .header("user-agent", "Mozilla/5.0")
+            .timeout(remaining.min(provider_timeout))
             .send()
             .await
         {
@@ -62,6 +75,11 @@ pub async fn fetch(ids: &[String], http: &reqwest::Client) -> Outcome {
                     }
                     _ => tracing::warn!(provider = "aws", %id, status, "unexpected HTTP status"),
                 }
+            }
+            Err(e) if e.is_timeout() && Instant::now() >= deadline => {
+                // Cut by the deadline, not a sign of Amazon failing.
+                tracing::debug!(provider = "aws", unanswered = keys.len() - idx, "deadline reached");
+                break;
             }
             Err(e) => {
                 tracing::warn!(provider = "aws", %id, error = %e, "request failed");
