@@ -48,6 +48,8 @@ By default `config.json` is read from the current directory; the
     failures](#provider-failures))
   * `providerRetry` - how long in seconds a failing provider stays disabled
     before Coce tries it again (default 300)
+  * `setToken` - secret required by `/set` (see [Forcing a cover
+    URL](#forcing-a-cover-url-set)). `/set` is disabled when unset or empty
   * `maxIds` - maximum number of IDs accepted in a single `/cover` request
     (default 100). Above it, Coce answers `400` with
     `{"error": "Too many IDs, maximum is 100"}` rather than silently
@@ -164,9 +166,31 @@ as JSONP:
 
 returns:
 
+The callback must be a JavaScript function name (letters, digits, `_`,
+`$`, `.`), otherwise Coce answers `400`. JSONP predates CORS, which Coce
+supports: new clients should call Coce with `fetch()` and read plain JSON
+instead.
+
 ```jsonp
 populateImg({"2847342257":"https://images-na.ssl-images-amazon.com/images/I/51LYLJRtthL._SL160_.jpg","9780563533191":"https://covers.openlibrary.org/b/id/2520432-M.jpg","9780415480635":"https://books.google.com/books/content?id=Yc30cofv4_MC&printsec=frontcover&img=1&zoom=1","9780821417492":"https://books.google.com/books/content?id=D5yimAEACAAJ&printsec=frontcover&img=1&zoom=1"})
 ```
+
+### Forcing a cover URL: `/set`
+
+`/set` stores a cover URL for an ID and a provider, for 10 years, e.g. to
+fix a wrong cover. It requires the `setToken` configured on the server, sent
+as a bearer token (a header rather than a URL parameter, which would end up
+in access logs):
+
+```sh
+curl -H "Authorization: Bearer $COCE_SET_TOKEN" \
+  "http://coce.server/set?provider=ol&id=9780563533191&url=https://example.org/cover.jpg"
+```
+
+It answers `{"success": true}`, `401` for a missing or bad token, `400` for
+a provider that isn't configured or a URL that isn't http(s), `503` if Redis
+can't be written to. When no `setToken` is configured (the default), `/set`
+is disabled and answers `403`: anyone could otherwise replace any cover.
 
 ## Client-side usage
 

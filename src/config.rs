@@ -77,6 +77,10 @@ pub struct Config {
     /// Maximum number of IDs accepted in a single /cover request.
     #[serde(default = "default_max_ids", rename = "maxIds")]
     pub max_ids: usize,
+    /// Secret required by `/set` (as `Authorization: Bearer <token>`).
+    /// `/set` is disabled when unset.
+    #[serde(default, rename = "setToken")]
+    pub set_token: Option<String>,
     #[serde(default)]
     pub redis: RedisConfig,
     #[serde(default)]
@@ -112,6 +116,7 @@ impl Default for Config {
             provider_timeout: default_provider_timeout(),
             provider_retry: default_provider_retry(),
             max_ids: default_max_ids(),
+            set_token: None,
             redis: RedisConfig::default(),
             cache: None,
             gb: None,
@@ -172,6 +177,9 @@ impl Config {
         }
         if let Some(v) = env_u64("COCE_MAX_IDS") {
             self.max_ids = v as usize;
+        }
+        if let Some(v) = env_string("COCE_SET_TOKEN") {
+            self.set_token = Some(v);
         }
 
         if let Some(v) = env_string("COCE_REDIS_HOST") {

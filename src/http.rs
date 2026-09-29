@@ -1,5 +1,6 @@
 use axum::body::Body;
 use axum::extract::{Query, State};
+use axum::http::{header, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -107,6 +108,7 @@ async fn cover(State(state): State<AppState>, Query(q): Query<CoverQuery>) -> Re
     };
 
     match q.callback {
+        Some(cb) if !is_valid_callback(&cb) => reject(&state, AppError::BadCallback),
         Some(cb) => {
             let js = format!("{cb}({})", serde_json::to_string(&body).unwrap());
             Response::builder()
@@ -125,7 +127,28 @@ struct SetQuery {
     url: String,
 }
 
-async fn set(State(state): State<AppState>, Query(q): Query<SetQuery>) -> Response {
+/// Force the cover URL of an ID for a provider (e.g. to fix a wrong cover),
+/// for 10 years. Requires the configured `setToken`.
+async fn set(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<SetQuery>) -> Response {
+    // An empty token would match an empty `Bearer ` header: treat it as unset.
+    let Some(expected) = state.config.set_token.as_deref().filter(|t| !t.is_empty()) else {
+        return AppError::SetDisabled.into_response();
+    };
+    let given = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    if !given.is_some_and(|t| constant_time_eq(t.as_bytes(), expected.as_bytes())) {
+        tracing::warn!(provider = %q.provider, id = %q.id, "/set refused: missing or bad token");
+        return AppError::Unauthorized.into_response();
+    }
+    if !state.config.providers.contains(&q.provider) {
+        return AppError::UnavailableProvider(q.provider).into_response();
+    }
+    if !(q.url.starts_with("https://") || q.url.starts_with("http://")) {
+        return AppError::BadUrl.into_response();
+    }
+
     let mut con = state.redis.clone();
     let key = format!("{}.{}", q.provider, q.id);
     let timeout_ms = state.config.redis.timeout;
@@ -135,12 +158,37 @@ async fn set(State(state): State<AppState>, Query(q): Query<SetQuery>) -> Respon
     )
     .await
     {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::warn!(%key, error = %e, "redis write failed"),
-        Err(_) => tracing::warn!(%key, timeout_ms, "redis write timed out"),
+        Ok(Ok(())) => {
+            tracing::info!(%key, url = %q.url, "cover URL set");
+            Json(serde_json::json!({ "success": true })).into_response()
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(%key, error = %e, "redis write failed");
+            AppError::CacheUnavailable.into_response()
+        }
+        Err(_) => {
+            tracing::warn!(%key, timeout_ms, "redis write timed out");
+            AppError::CacheUnavailable.into_response()
+        }
     }
-    Json(serde_json::json!({ "success": true })).into_response()
 }
+
+/// A JSONP callback is echoed into the JavaScript response, so only accept
+/// a (possibly dotted) function name, e.g. `populateImg` or `Coce.cb_1`.
+fn is_valid_callback(cb: &str) -> bool {
+    !cb.is_empty()
+        && cb.len() <= 128
+        && cb
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$' | b'.'))
+}
+
+/// Compare secrets without leaking, through timing, how many leading bytes
+/// match.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 
 /// Activity counters, provider and breaker state, Redis figures. Counters
 /// are per process and reset on restart. Redis figures only use
@@ -202,5 +250,30 @@ async fn redis_stats(state: &AppState) -> serde_json::Value {
             "used_memory": used_memory,
         }),
         _ => serde_json::json!({ "reachable": false }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn callback_validation() {
+        assert!(is_valid_callback("populateImg"));
+        assert!(is_valid_callback("Coce.cb_1"));
+        assert!(is_valid_callback("jQuery$123"));
+        assert!(!is_valid_callback(""));
+        assert!(!is_valid_callback("alert(1)//"));
+        assert!(!is_valid_callback("a;b"));
+        assert!(!is_valid_callback("<script>"));
+        assert!(!is_valid_callback(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn token_comparison() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+        assert!(!constant_time_eq(b"secret", b"secret2"));
+        assert!(!constant_time_eq(b"", b"secret"));
     }
 }

@@ -8,16 +8,41 @@ pub enum AppError {
     BadId,
     UnavailableProvider(String),
     TooManyIds(usize),
+    BadCallback,
+    BadUrl,
+    SetDisabled,
+    Unauthorized,
+    CacheUnavailable,
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let message = match self {
-            AppError::MissingId => "ID parameter is missing".to_string(),
-            AppError::BadId => "Bad id parameter".to_string(),
-            AppError::UnavailableProvider(p) => format!("Unavailable provider: {p}"),
-            AppError::TooManyIds(max) => format!("Too many IDs, maximum is {max}"),
+        let (status, message) = match self {
+            AppError::MissingId => (StatusCode::BAD_REQUEST, "ID parameter is missing".to_string()),
+            AppError::BadId => (StatusCode::BAD_REQUEST, "Bad id parameter".to_string()),
+            AppError::UnavailableProvider(p) => {
+                (StatusCode::BAD_REQUEST, format!("Unavailable provider: {p}"))
+            }
+            AppError::TooManyIds(max) => {
+                (StatusCode::BAD_REQUEST, format!("Too many IDs, maximum is {max}"))
+            }
+            AppError::BadCallback => (
+                StatusCode::BAD_REQUEST,
+                "Bad callback parameter: must be a JavaScript function name".to_string(),
+            ),
+            AppError::BadUrl => (
+                StatusCode::BAD_REQUEST,
+                "Bad url parameter: must be an http(s) URL".to_string(),
+            ),
+            AppError::SetDisabled => (
+                StatusCode::FORBIDDEN,
+                "/set is disabled: no setToken configured".to_string(),
+            ),
+            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Missing or bad token".to_string()),
+            AppError::CacheUnavailable => {
+                (StatusCode::SERVICE_UNAVAILABLE, "Cache unavailable".to_string())
+            }
         };
-        (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+        (status, Json(json!({ "error": message }))).into_response()
     }
 }
