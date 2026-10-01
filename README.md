@@ -127,6 +127,36 @@ IDs sent rather than by the provider.
 The breaker state is kept in memory, per Coce instance, and is reset on
 restart.
 
+### Changing settings in production
+
+Coce caches the URL it built, not the settings it built it with: the Redis
+key (`ol.9780563533191`) only depends on the provider and the ISBN. After
+changing one of these settings, the URLs already cached keep the old form
+until they expire, which can take the provider's whole `timeout`:
+
+* `imageSize` of Open Library (`ol`) or ORB (`orb`)
+* `cache` of a provider (local copies on or off)
+* `cache.url` (address the local copies are served from)
+
+To apply such a change at once, purge the keys of the provider concerned
+(here `orb`) after restarting Coce:
+
+```sh
+redis-cli --scan --pattern 'orb.*' | xargs redis-cli del
+```
+
+With local copies (`cache: true`), the image files are named after the ISBN
+only (`<cache.path>/orb/<isbn>.jpg`), whatever their size, and never expire:
+after changing `imageSize`, also empty the provider's directory, otherwise
+the old images keep being served until each ISBN is looked up again.
+
+```sh
+rm -f /path/to/covers/orb/*.jpg
+```
+
+Other settings (timeouts, `maxIds`, provider order...) take effect on
+restart, with no purge needed.
+
 ## Service usage
 
 To get all cover images from Open Library (ol), Google Books (gb), and Amazon
