@@ -100,6 +100,9 @@ By default `config.json` is read from the current directory; the
   * `orb` - ORB
      * `user` - user to access ORB API
      * `key` - API key
+     * `imageSize` - `thumbnail` (default, 160 px high) or `original` (500
+       px high, for larger display; falls back to the thumbnail when ORB has
+       no original)
      * `cache` - true/false, are images locally cached (and served)
      * `timeout` - timeout of the cached URL from ORB, in seconds (same
        meaning as for Open Library)

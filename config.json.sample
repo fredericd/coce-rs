@@ -29,6 +29,7 @@
     "timeout": 86400,
     "user": "authorized user",
     "key": "api key",
+    "imageSize": "thumbnail",
     "cache": true
   }
 }

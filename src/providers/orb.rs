@@ -38,17 +38,26 @@ pub async fn fetch(ids: &[String], cfg: &Config, http: &reqwest::Client) -> Outc
         }
     };
 
+    // ORB serves each front cover as a thumbnail (160 px high) and an
+    // original (500 px high). Thumbnail unless `imageSize` asks for the original,
+    // which falls back to the thumbnail when missing.
+    let sizes: &[&str] = match orb_cfg.image_size.as_deref() {
+        Some("original") => &["original", "thumbnail"],
+        _ => &["thumbnail"],
+    };
+
     let mut found = HashMap::new();
     if let Some(items) = json.get("data").and_then(|d| d.as_array()) {
         for item in items {
             let ean = item.get("ean13").and_then(|v| v.as_str());
-            let thumbnail = item
-                .get("images")
-                .and_then(|i| i.get("front"))
-                .and_then(|f| f.get("thumbnail"))
-                .and_then(|t| t.get("src"))
-                .and_then(|s| s.as_str());
-            if let (Some(id), Some(url)) = (ean, thumbnail) {
+            let front = item.get("images").and_then(|i| i.get("front"));
+            let url = sizes.iter().find_map(|size| {
+                front
+                    .and_then(|f| f.get(*size))
+                    .and_then(|i| i.get("src"))
+                    .and_then(|s| s.as_str())
+            });
+            if let (Some(id), Some(url)) = (ean, url) {
                 found.insert(id.to_string(), url.to_string());
             }
         }
