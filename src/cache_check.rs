@@ -21,8 +21,9 @@ pub struct Args {
     /// delete broken files, point keys to the local file when one exists
     #[arg(long)]
     pub fix: bool,
-    /// Also recreate missing keys for files on disk (beware: files keep the
-    /// imageSize they were downloaded with)
+    /// Also recreate missing keys for files on disk. Only after Redis lost
+    /// its content with the image directory intact, not in routine runs, and
+    /// never after an imageSize change (files keep their old size)
     #[arg(long, requires = "fix")]
     pub restore: bool,
     /// List the IDs of each case
@@ -65,7 +66,7 @@ impl Case {
             Case::InvalidFile => "delete file (and key if local)",
             Case::RemoteWithFile | Case::OldBaseUrl => "point key to local file",
             Case::FileWithoutKey if restore => "recreate key",
-            Case::FileWithoutKey => "left as is (see --restore)",
+            Case::FileWithoutKey => "left as is (normal once a key expired)",
             Case::Forced | Case::NotFoundWithFile | Case::NonCanonicalName => "reported only",
         }
     }

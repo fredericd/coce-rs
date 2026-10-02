@@ -184,9 +184,19 @@ coce cache-check --fix --restore      # also recreate missing keys
 | file on disk, no key | recreate the key, only with `--restore` |
 | URL forced by `/set`, "no cover" key, file not named by ISBN-13 | reported only |
 
-`--restore` brings back files whatever `imageSize` they were downloaded
-with: after an `imageSize` change, empty the directory rather than restore
-it. The command scans all the provider's keys (`SCAN`), which is fine as an
+**When to use `--restore`.** A file without key is normal: its key simply
+expired, and if the ISBN is requested again, Coce looks it up and downloads
+the image again. Leaving such files alone is always safe. `--restore` is for
+one situation: Redis lost its content (flushed, or restarted without
+persistence) while the image directory is intact. Recreating the keys from
+the files then saves a provider call and a download per ISBN. Don't use it
+in routine runs (e.g. a nightly `--fix`): it would also bring back files no
+longer worth keeping, such as images whose provider has since removed the
+cover. And never after an `imageSize` change: files keep the size they were
+downloaded with, so restoring would put the old size back in service; empty
+the directory instead.
+
+The command scans all the provider's keys (`SCAN`), which is fine as an
 occasional or nightly job. Exit code: 0 when nothing needs fixing (or with
 `--fix`), 1 when fixes are needed, 2 on usage error, so that it can be used
 in a cron job or a monitoring check. With Docker:
