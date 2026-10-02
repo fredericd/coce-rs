@@ -414,6 +414,82 @@ Caveat: Coce needs Redis at startup. If Redis is unreachable, Coce retries
 for a few seconds, then exits with an error; with `Restart=on-failure`
 systemd keeps restarting it until Redis is up.
 
+### Behind NGINX
+
+Coce is meant to run behind a reverse proxy, which terminates TLS, serves
+the local image copies, and protects the service. Since a single Coce
+instance usually serves many OPACs, the proxy is also where one client is
+kept from degrading the service for the others. Example:
+
+```nginx
+# http {} context
+limit_req_zone $binary_remote_addr zone=coce_per_ip:10m rate=5r/s;
+
+log_format coce '$remote_addr [$time_local] "$request" $status $body_bytes_sent '
+                'rt=$request_time urt=$upstream_response_time '
+                'origin="$http_origin" referer="$http_referer" ua="$http_user_agent"';
+
+upstream coce {
+    server 127.0.0.1:8080;
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl;
+    server_name coce.example.org;
+    # ssl_certificate / ssl_certificate_key ...
+
+    server_tokens off;
+    keepalive_requests 1000;
+    access_log /var/log/nginx/coce.access.log coce;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+
+    location / {
+        proxy_pass http://coce;
+    }
+
+    location = /cover {
+        limit_req zone=coce_per_ip burst=20 nodelay;
+        limit_req_status 429;
+        proxy_pass http://coce;
+    }
+
+    location = /stats {
+        allow 10.0.0.0/8;
+        deny all;
+        proxy_pass http://coce;
+    }
+
+    # Local image copies (providers with `cache: true`): `cache.path`,
+    # served at `cache.url`
+    location /covers/ {
+        alias /var/lib/coce/covers/;
+        expires 30d;
+    }
+}
+```
+
+* `keepalive` (upstream), `proxy_http_version 1.1` and an empty
+  `Connection` header keep the connections between NGINX and Coce open,
+  instead of opening one per request.
+* `keepalive_requests 1000`: before NGINX 1.19.10, a client connection is
+  closed after 100 requests by default, forcing a new TLS handshake.
+* `server_tokens off` stops advertising the NGINX version.
+* The `coce` log format records the time spent in Coce (`urt`) next to the
+  total time (`rt`), which tells Coce's delays from network ones, and the
+  calling OPAC (`origin`, `referer`), which tells which OPAC generates the
+  load or the errors.
+* `limit_req` caps each client IP on `/cover`: a crawler hammering an OPAC
+  gets `429` instead of filling Coce with lookups, and can no longer trip a
+  provider's circuit breaker for every OPAC. Size it generously: a whole
+  library, or a university, often reaches Coce through a single NAT
+  address, and Koha calls Coce through JSONP, so a client over the limit
+  just gets pages without covers, silently.
+* `/stats` is kept internal (see [Monitoring](#monitoring)).
+
 ### Docker
 
 Configuration can come from `config.json`, from `COCE_*` environment
@@ -496,15 +572,8 @@ Redis database: an ISBN cached for three providers counts three times.
 Counting cached covers per provider would require scanning every key, which
 is too expensive on a large cache to be done on each call.
 
-Example NGINX configuration, keeping `/stats` internal:
-
-```nginx
-location = /stats {
-    allow 10.0.0.0/8;
-    deny all;
-    proxy_pass http://127.0.0.1:8080;
-}
-```
+See [Behind NGINX](#behind-nginx) for an NGINX configuration keeping
+`/stats` internal.
 
 ## Logging
 
