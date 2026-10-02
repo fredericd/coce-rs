@@ -1,4 +1,5 @@
 mod breaker;
+mod cache_check;
 mod config;
 mod error;
 mod fetcher;
@@ -37,6 +38,26 @@ async fn main() -> anyhow::Result<()> {
 
     let config_path = std::env::var("COCE_CONFIG").unwrap_or_else(|_| "config.json".to_string());
     let cfg = Arc::new(config::Config::load(&config_path)?);
+
+    // Without arguments, run the server; otherwise, a maintenance command.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(command) = args.first() {
+        let code = match command.as_str() {
+            "cache-check" => {
+                let mut redis = redis_store::connect(&cfg.redis.host, cfg.redis.port).await?;
+                cache_check::run(&cfg, &mut redis, &args[1..]).await?
+            }
+            "-h" | "--help" | "help" => {
+                println!("Usage: coce                 run the server\n       coce cache-check ...  see `coce cache-check --help`");
+                0
+            }
+            other => {
+                eprintln!("unknown command: {other} (try `coce --help`)");
+                2
+            }
+        };
+        std::process::exit(code);
+    }
     tracing::info!(
         config = %config_path,
         providers = ?cfg.providers,

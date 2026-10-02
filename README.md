@@ -157,6 +157,38 @@ rm -f /path/to/covers/orb/*.jpg
 Other settings (timeouts, `maxIds`, provider order...) take effect on
 restart, with no purge needed.
 
+### Checking local copies: `coce cache-check`
+
+For providers with `cache: true`, Redis and the image directory can drift
+apart: a download that failed while Redis already points to the local file,
+an error page saved as an image, keys expired or purged while files remain,
+a change of `cache.url`... `coce cache-check` compares them, using the same
+configuration as the server (`COCE_CONFIG`, `COCE_*` variables):
+
+```sh
+coce cache-check                      # report only
+coce cache-check --provider orb --verbose
+coce cache-check --fix                # apply the fixes
+coce cache-check --fix --restore      # also recreate missing keys
+```
+
+| Case | `--fix` |
+|---|---|
+| key points to a missing local file | delete the key: the ISBN is looked up and downloaded again on next request |
+| file isn't an image (empty, HTML error page...) | delete the file, and its key if local |
+| key holds the provider's remote URL, file on disk | point the key to the local file |
+| key holds a local URL with an old `cache.url` | point the key to the current one |
+| file on disk, no key | recreate the key, only with `--restore` |
+| URL forced by `/set`, "no cover" key, file not named by ISBN-13 | reported only |
+
+`--restore` brings back files whatever `imageSize` they were downloaded
+with: after an `imageSize` change, empty the directory rather than restore
+it. The command scans all the provider's keys (`SCAN`), which is fine as an
+occasional or nightly job. Exit code: 0 when nothing needs fixing (or with
+`--fix`), 1 when fixes are needed, 2 on usage error, so that it can be used
+in a cron job or a monitoring check. With Docker:
+`docker compose exec coce coce cache-check`.
+
 ## Service usage
 
 To get all cover images from Open Library (ol), Google Books (gb), and Amazon
@@ -542,5 +574,6 @@ production, stick with the default level.
 - `breaker.rs` — per-provider circuit breaker (lock-free atomics)
 - `http.rs` — Axum routes (`/`, `/cover`, `/set`, `/stats`)
 - `stats.rs` — in-memory activity counters for `/stats` (lock-free atomics)
+- `cache_check.rs` — `coce cache-check` command (local copies vs Redis)
 - `error.rs` — HTTP errors (JSON `{"error": ...}` responses)
 
