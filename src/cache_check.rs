@@ -9,54 +9,25 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-pub const USAGE: &str = "\
-Usage: coce cache-check [--provider <name>] [--fix] [--restore] [--verbose]
-
-Compare the local image copies of providers with `cache: true` with the
-URLs stored in Redis. Reports only, unless --fix is given.
-
-  --provider <name>  check this provider only
-  --fix              apply the fixes (delete keys pointing to missing or
-                     broken files, delete broken files, point keys to the
-                     local file when one exists)
-  --restore          with --fix, also recreate missing keys for files on
-                     disk (beware: files keep the imageSize they were
-                     downloaded with)
-  --verbose          list the IDs of each case
-
-Exit code: 0 if nothing needs fixing (or --fix was given), 1 if fixes are
-needed, 2 on usage error.";
-
-struct Options {
-    provider: Option<String>,
-    fix: bool,
-    restore: bool,
-    verbose: bool,
-}
-
-fn parse_args(args: &[String]) -> Result<Options, String> {
-    let mut opts = Options {
-        provider: None,
-        fix: false,
-        restore: false,
-        verbose: false,
-    };
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--provider" => {
-                opts.provider = Some(args.next().ok_or("--provider needs a value")?.clone());
-            }
-            "--fix" => opts.fix = true,
-            "--restore" => opts.restore = true,
-            "--verbose" => opts.verbose = true,
-            other => return Err(format!("unknown argument: {other}")),
-        }
-    }
-    if opts.restore && !opts.fix {
-        return Err("--restore requires --fix".to_string());
-    }
-    Ok(opts)
+/// Options of `coce cache-check` (described on `Command::CacheCheck`).
+#[derive(clap::Args)]
+#[command(after_help = "Exit code: 0 if nothing needs fixing (or --fix was given), \
+1 if fixes are needed, 2 on usage error.")]
+pub struct Args {
+    /// Check this provider only
+    #[arg(long)]
+    pub provider: Option<String>,
+    /// Apply the fixes: delete keys pointing to missing or broken files,
+    /// delete broken files, point keys to the local file when one exists
+    #[arg(long)]
+    pub fix: bool,
+    /// Also recreate missing keys for files on disk (beware: files keep the
+    /// imageSize they were downloaded with)
+    #[arg(long, requires = "fix")]
+    pub restore: bool,
+    /// List the IDs of each case
+    #[arg(short, long)]
+    pub verbose: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -138,18 +109,7 @@ struct Fixes {
 }
 
 /// Run the command; returns the process exit code.
-pub async fn run(cfg: &Config, redis: &mut RedisManager, args: &[String]) -> anyhow::Result<i32> {
-    if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("{USAGE}");
-        return Ok(0);
-    }
-    let opts = match parse_args(args) {
-        Ok(opts) => opts,
-        Err(e) => {
-            eprintln!("{e}\n\n{USAGE}");
-            return Ok(2);
-        }
-    };
+pub async fn run(cfg: &Config, redis: &mut RedisManager, opts: &Args) -> anyhow::Result<i32> {
     let Some(cache_cfg) = cfg.cache.as_ref() else {
         eprintln!("No local image cache configured (`cache.path` / `cache.url`).");
         return Ok(2);
@@ -343,20 +303,6 @@ async fn apply(redis: &mut RedisManager, fixes: &Fixes) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn args(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn parses_arguments() {
-        let o = parse_args(&args(&["--provider", "orb", "--fix", "--restore", "--verbose"])).unwrap();
-        assert_eq!(o.provider.as_deref(), Some("orb"));
-        assert!(o.fix && o.restore && o.verbose);
-        assert!(parse_args(&args(&["--restore"])).is_err());
-        assert!(parse_args(&args(&["--provider"])).is_err());
-        assert!(parse_args(&args(&["--bogus"])).is_err());
-    }
 
     #[test]
     fn recognizes_images() {

@@ -29,11 +29,14 @@ only cache images URL but images themselves.
 ```sh
 cargo build --release
 cp config.json.sample config.json   # then adjust Redis host/port, etc.
-COCE_CONFIG=config.json ./target/release/coce
+./target/release/coce
 ```
 
-By default `config.json` is read from the current directory; the
-`COCE_CONFIG` environment variable points to a different path.
+`coce` (or `coce serve`) runs the server. By default `config.json` is read
+from the current directory; `--config <file>` (`-c`), or the `COCE_CONFIG`
+environment variable, points to a different path, the option winning over
+the variable. `coce --help` lists the commands and options, `coce --version`
+prints the version.
 
 * __Configure__ Coce operation by editing
   [config.json](https://github.com/fredericd/coce-rs/blob/master/config.json.sample)

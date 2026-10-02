@@ -9,7 +9,9 @@ mod providers;
 mod redis_store;
 mod stats;
 
+use clap::{Parser, Subcommand};
 use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::task::TaskTracker;
@@ -32,34 +34,52 @@ fn init_logging() {
     }
 }
 
+/// Book cover URL cache: fetches cover image URLs from providers (Amazon,
+/// Google Books, Open Library, ORB), caches them in Redis and serves them
+/// as a REST web service.
+#[derive(Parser)]
+#[command(version)]
+struct Cli {
+    /// Configuration file; `COCE_*` environment variables override its
+    /// values, and built-in defaults apply when it doesn't exist
+    #[arg(short, long, env = "COCE_CONFIG", default_value = "config.json", global = true)]
+    config: PathBuf,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the server (default when no command is given)
+    Serve,
+    /// Compare the local image copies with the URLs stored in Redis
+    ///
+    /// Checks the providers with `cache: true`: keys pointing to missing or
+    /// broken files, keys not pointing to an existing local file, files
+    /// without keys. Reports only, unless --fix is given.
+    CacheCheck(cache_check::Args),
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
     init_logging();
+    let cfg = Arc::new(config::Config::load(&cli.config)?);
 
-    let config_path = std::env::var("COCE_CONFIG").unwrap_or_else(|_| "config.json".to_string());
-    let cfg = Arc::new(config::Config::load(&config_path)?);
-
-    // Without arguments, run the server; otherwise, a maintenance command.
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(command) = args.first() {
-        let code = match command.as_str() {
-            "cache-check" => {
-                let mut redis = redis_store::connect(&cfg.redis.host, cfg.redis.port).await?;
-                cache_check::run(&cfg, &mut redis, &args[1..]).await?
-            }
-            "-h" | "--help" | "help" => {
-                println!("Usage: coce                 run the server\n       coce cache-check ...  see `coce cache-check --help`");
-                0
-            }
-            other => {
-                eprintln!("unknown command: {other} (try `coce --help`)");
-                2
-            }
-        };
-        std::process::exit(code);
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Serve => serve(cfg, &cli.config).await,
+        Command::CacheCheck(args) => {
+            let mut redis = redis_store::connect(&cfg.redis.host, cfg.redis.port).await?;
+            let code = cache_check::run(&cfg, &mut redis, &args).await?;
+            std::process::exit(code);
+        }
     }
+}
+
+async fn serve(cfg: Arc<config::Config>, config_path: &Path) -> anyhow::Result<()> {
     tracing::info!(
-        config = %config_path,
+        config = %config_path.display(),
         providers = ?cfg.providers,
         timeout_ms = cfg.timeout,
         provider_timeout_ms = cfg.provider_timeout,
@@ -149,4 +169,40 @@ async fn shutdown_signal() {
         _ = terminate => {}
     }
     tracing::info!("shutdown requested, finishing requests in progress");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn parses_commands() {
+        let cli = Cli::try_parse_from(["coce"]).unwrap();
+        assert!(cli.command.is_none());
+
+        let cli = Cli::try_parse_from(["coce", "-c", "/etc/coce.json", "serve"]).unwrap();
+        assert_eq!(cli.config, PathBuf::from("/etc/coce.json"));
+        assert!(matches!(cli.command, Some(Command::Serve)));
+
+        let cli = Cli::try_parse_from(["coce", "cache-check", "--provider=orb", "--fix", "-v"]).unwrap();
+        let Some(Command::CacheCheck(args)) = cli.command else {
+            panic!("expected cache-check");
+        };
+        assert_eq!(args.provider.as_deref(), Some("orb"));
+        assert!(args.fix && args.verbose && !args.restore);
+
+        // --config is global: accepted after the subcommand too.
+        let cli = Cli::try_parse_from(["coce", "cache-check", "--config", "x.json"]).unwrap();
+        assert_eq!(cli.config, PathBuf::from("x.json"));
+
+        assert!(Cli::try_parse_from(["coce", "cache-check", "--restore"]).is_err());
+        assert!(Cli::try_parse_from(["coce", "cache-check", "--provider"]).is_err());
+        assert!(Cli::try_parse_from(["coce", "bogus"]).is_err());
+    }
 }
