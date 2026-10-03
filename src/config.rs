@@ -81,6 +81,9 @@ pub struct Config {
     /// are cached for their provider's `timeout`.
     #[serde(default = "default_cache_ttl", rename = "notFoundTimeout")]
     pub not_found_timeout: u64,
+    /// Days of activity history kept in Redis (`/stats/daily`, `coce stats`).
+    #[serde(default = "default_stats_days", rename = "statsDays")]
+    pub stats_days: u32,
     /// Secret required by `/set` (as `Authorization: Bearer <token>`).
     /// `/set` is disabled when unset.
     #[serde(default, rename = "setToken")]
@@ -112,6 +115,10 @@ fn default_cache_ttl() -> u64 {
     86_400
 }
 
+fn default_stats_days() -> u32 {
+    30
+}
+
 fn default_max_ids() -> usize {
     100
 }
@@ -126,6 +133,7 @@ impl Default for Config {
             provider_retry: default_provider_retry(),
             max_ids: default_max_ids(),
             not_found_timeout: default_cache_ttl(),
+            stats_days: default_stats_days(),
             set_token: None,
             redis: RedisConfig::default(),
             cache: None,
@@ -174,6 +182,11 @@ impl Config {
             .unwrap_or_else(default_cache_ttl)
     }
 
+    /// Days of activity history kept, at least one (today).
+    pub fn stats_days(&self) -> u32 {
+        self.stats_days.max(1)
+    }
+
     /// How long (seconds) a "no cover" answer stays cached.
     pub fn not_found_ttl(&self) -> u64 {
         if self.not_found_timeout > 0 {
@@ -209,6 +222,9 @@ impl Config {
         }
         if let Some(v) = env_u64("COCE_NOT_FOUND_TIMEOUT") {
             self.not_found_timeout = v;
+        }
+        if let Some(v) = env_u64("COCE_STATS_DAYS") {
+            self.stats_days = u32::try_from(v).unwrap_or(u32::MAX);
         }
         if let Some(v) = env_string("COCE_SET_TOKEN") {
             self.set_token = Some(v);

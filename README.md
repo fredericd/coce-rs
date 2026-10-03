@@ -57,6 +57,8 @@ prints the version.
     and can be kept long (e.g. 30 days, `2592000`), while a book without a
     cover today, typically a new title, often gets one within days, so its
     "no cover" answer is better kept short
+  * `statsDays` - days of activity history kept in Redis, for
+    `/stats/daily` and `coce stats` (default 30)
   * `setToken` - secret required by `/set` (see [Forcing a cover
     URL](#forcing-a-cover-url-set)). `/set` is disabled when unset or empty
   * `maxIds` - maximum number of IDs accepted in a single `/cover` request
@@ -565,8 +567,9 @@ Example:
     the provider is disabled, aren't counted
 * `redis` - reachability, response time, total number of keys, memory used
 
-Counters are kept in memory, per Coce instance, and reset on restart
-(`started_at` is in the server's local time, with its UTC offset). `redis.keys` counts (provider, ID)
+These counters are kept in memory, per Coce instance, and reset on restart
+(`started_at` is in the server's local time, with its UTC offset); see
+below for a history that survives restarts. `redis.keys` counts (provider, ID)
 pairs, including cached "no cover" answers, and any other key in the same
 Redis database: an ISBN cached for three providers counts three times.
 Counting cached covers per provider would require scanning every key, which
@@ -574,6 +577,45 @@ is too expensive on a large cache to be done on each call.
 
 See [Behind NGINX](#behind-nginx) for an NGINX configuration keeping
 `/stats` internal.
+
+### Daily history: `/stats/daily` and `coce stats`
+
+The same counters are also summed per day (server local time) and kept in
+Redis for `statsDays` days (default 30): unlike `/stats`, this history
+survives restarts, and adds up all Coce instances sharing the Redis
+server. `/stats/daily?days=7` returns the last days as JSON, most recent
+(today, in progress) first; without `days`, the whole retained period:
+
+```json
+[
+  { "date": "2026-10-03",
+    "requests": { "cover": 9, "rejected": 2, "ids": 10, "global_timeouts": 0 },
+    "providers": {
+      "gb": { "cache_hits": 8, "cache_misses": 2, "cache_hit_rate": 0.8,
+              "calls": 1, "failures": 0, "skipped": 0, "covers_found": 2,
+              "avg_call_ms": 228 },
+      ... } },
+  ...
+]
+```
+
+`coce stats` prints it as tables in a terminal (`--days N`, `--json` for the
+JSON above):
+
+```
+Provider gb
+date              hits    misses   hit%   calls  failures  skipped   found  avg ms
+2026-10-03           8         2   80.0       1         0        0       2     228
+2026-10-02         300       100   75.0      40         0        0      70     300
+```
+
+Each server adds its counts to Redis every 10 seconds, and on shutdown, in
+one round trip, so counting stays off the request path. `/stats/daily`
+includes the counts of the answering instance not flushed yet; `coce stats`
+shows what is in Redis. Days without activity show zeros. Fastest and
+slowest call times are only in `/stats`. Each day is a Redis hash
+(`coce:stats:YYYY-MM-DD`) that expires on its own after the retention
+period.
 
 ## Logging
 
@@ -684,8 +726,9 @@ production, stick with the default level.
   providers in parallel, enforces a global timeout, writes results (and
   misses) back to Redis
 - `breaker.rs` — per-provider circuit breaker (lock-free atomics)
-- `http.rs` — Axum routes (`/`, `/cover`, `/set`, `/stats`)
+- `http.rs` — Axum routes (`/`, `/cover`, `/set`, `/stats`, `/stats/daily`)
 - `stats.rs` — in-memory activity counters for `/stats` (lock-free atomics)
 - `cache_check.rs` — `coce cache-check` command (local copies vs Redis)
+- `daily.rs` — daily activity history in Redis (`/stats/daily`, `coce stats`)
 - `error.rs` — HTTP errors (JSON `{"error": ...}` responses)
 

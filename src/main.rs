@@ -1,6 +1,7 @@
 mod breaker;
 mod cache_check;
 mod config;
+mod daily;
 mod error;
 mod fetcher;
 mod http;
@@ -14,6 +15,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing_subscriber::EnvFilter;
 
@@ -53,6 +55,8 @@ struct Cli {
 enum Command {
     /// Run the server (default when no command is given)
     Serve,
+    /// Show the daily activity history (requests, cache, providers)
+    Stats(daily::Args),
     /// Compare the local image copies with the URLs stored in Redis
     ///
     /// Checks the providers with `cache: true`: keys pointing to missing or
@@ -69,6 +73,10 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve(cfg, &cli.config).await,
+        Command::Stats(args) => {
+            let mut redis = redis_store::connect(&cfg.redis.host, cfg.redis.port).await?;
+            daily::run(&cfg, &mut redis, &args).await
+        }
         Command::CacheCheck(args) => {
             let mut redis = redis_store::connect(&cfg.redis.host, cfg.redis.port).await?;
             let code = cache_check::run(&cfg, &mut redis, &args).await?;
@@ -111,6 +119,16 @@ async fn serve(cfg: Arc<config::Config>, config_path: &Path) -> anyhow::Result<(
     let stats = Arc::new(stats::Stats::new(&cfg.providers));
     let tasks = TaskTracker::new();
 
+    // Daily history: counts are added to Redis every few seconds.
+    let flusher_stop = CancellationToken::new();
+    let flusher = tokio::spawn(daily::run_flusher(
+        stats.clone(),
+        redis.clone(),
+        cfg.clone(),
+        flusher_stop.clone(),
+    ));
+    let (final_stats, mut final_redis, final_cfg) = (stats.clone(), redis.clone(), cfg.clone());
+
     let port = cfg.port;
     let shutdown_grace = Duration::from_millis(cfg.timeout);
     let state = http::AppState {
@@ -138,6 +156,10 @@ async fn serve(cfg: Arc<config::Config>, config_path: &Path) -> anyhow::Result<(
     if tokio::time::timeout(shutdown_grace, tasks.wait()).await.is_err() {
         tracing::warn!(pending = tasks.len(), "background tasks still running, exiting anyway");
     }
+    // Last counts into the daily history, now that nothing counts anymore.
+    flusher_stop.cancel();
+    let _ = flusher.await;
+    daily::flush(&final_stats, &mut final_redis, &final_cfg).await;
     tracing::info!("coce stopped");
     Ok(())
 }

@@ -14,6 +14,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::breaker::Breakers;
 use crate::config::Config;
+use crate::daily;
 use crate::error::AppError;
 use crate::fetcher;
 use crate::isbn;
@@ -38,6 +39,7 @@ pub fn router(state: AppState) -> Router {
         .route("/cover", get(cover))
         .route("/set", get(set))
         .route("/stats", get(stats))
+        .route("/stats/daily", get(stats_daily))
         .with_state(state)
         // Coce is meant to be called from browser JS running on whatever
         // site embeds the cover images (a different origin than Coce
@@ -235,6 +237,25 @@ async fn stats(State(state): State<AppState>) -> Response {
         "redis": redis_stats(&state).await,
     }))
     .into_response()
+}
+
+#[derive(Deserialize)]
+struct DailyQuery {
+    days: Option<u32>,
+}
+
+/// Daily activity history, most recent day (today, in progress) first, over
+/// `days` days (default and maximum: `statsDays`).
+async fn stats_daily(State(state): State<AppState>, Query(q): Query<DailyQuery>) -> Response {
+    let cfg = &state.config;
+    let days = q.days.unwrap_or(cfg.stats_days()).clamp(1, cfg.stats_days());
+    let mut con = state.redis.clone();
+    let timeout = Duration::from_millis(cfg.redis.timeout);
+    let read = daily::read(&mut con, cfg, days, Some(state.stats.pending()));
+    match tokio::time::timeout(timeout, read).await {
+        Ok(Ok(history)) => Json(history).into_response(),
+        _ => AppError::CacheUnavailable.into_response(),
+    }
 }
 
 async fn redis_stats(state: &AppState) -> serde_json::Value {
