@@ -492,6 +492,34 @@ server {
   just gets pages without covers, silently.
 * `/stats` is kept internal (see [Monitoring](#monitoring)).
 
+### Several instances
+
+Several Coce servers can share one Redis server, typically behind a load
+balancing NGINX `upstream`. The cover cache is then shared: an ISBN looked
+up by one server is served from cache by the others. Points to watch:
+
+* **Local image copies** (`cache: true`): each server downloads images to
+  its own disk, but stores their URL in the shared Redis. A server can then
+  return the URL of a file that only exists on another server's disk, and
+  the image is broken whenever `/covers/` is served from the wrong one. Put
+  `cache.path` on storage shared by all servers (e.g. NFS), served from
+  there. Run `coce cache-check` only where that shared directory is visible:
+  run against a server's private directory, `--fix` would delete the keys
+  of files held by the others.
+* **Same configuration** on all servers, at least what shapes the cached
+  URLs and durations (providers' `timeout` and `imageSize`, `cache`,
+  `cache.url`, `notFoundTimeout`): otherwise one Redis holds URLs built in
+  different ways.
+* **Same time zone** on all servers: the daily history (`/stats/daily`,
+  `coce stats`) adds up the counts of all servers per local day, and
+  servers in different time zones would split days differently.
+* **`/stats` is per server**: behind a load balancer, each call answers
+  for whichever server receives it. Use `/stats/daily` or `coce stats` for
+  figures covering all servers. Circuit breakers are per server too, each
+  disabling a failing provider on its own.
+* Two servers looking up the same uncached ISBN at the same time both call
+  the provider; harmless, the answer is just cached twice.
+
 ### Docker
 
 Configuration can come from `config.json`, from `COCE_*` environment
