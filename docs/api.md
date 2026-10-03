@@ -118,29 +118,8 @@ of the OPACs using the server.
 
 ### JavaScript sample client
 
-[`client-sample/coceclient.js`](../client-sample/coceclient.js) is a sample
-client for other web pages, used by
-[`client-sample/sample-client.html`](../client-sample/sample-client.html). It
-calls Coce with `fetch()`, splits large ID lists into batches of `maxIds`,
-and keeps found URLs in memory:
-
-```javascript
-document.addEventListener('DOMContentLoaded', () => {
-  const ids = [...document.querySelectorAll('[id^="coce-thumbnail"]')].map(
-    (el) => el.dataset.id,
-  );
-  if (ids.length === 0) return;
-
-  const client = new CoceClient('http://localhost:8080', 'ol,gb,aws');
-  client
-    .fetch(ids, (id, url) => {
-      for (const el of document.querySelectorAll(`[data-id="${id}"]`)) {
-        const img = document.createElement('img');
-        img.src = url;
-        img.title = url;
-        el.append(img);
-      }
-    })
-    .catch((err) => console.error('coce fetch failed:', err));
-});
-```
+[`client-sample/coceclient.js`](../client-sample/coceclient.js) is a small
+client for other web pages: it calls Coce with `fetch()`, splits long ID
+lists into batches of `maxIds`, and remembers the answers for the life of
+the page. [`client-sample/README.md`](../client-sample/README.md) explains
+how to use it, and how to run the sample page using it.

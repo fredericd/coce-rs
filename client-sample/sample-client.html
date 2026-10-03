@@ -2,34 +2,68 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Coce Client Sample</title>
+    <title>Coce client sample</title>
     <script src="coceclient.js"></script>
+    <style>
+      body { font-family: sans-serif; margin: 2em; }
+      ul { display: flex; flex-wrap: wrap; gap: 1.5em; padding: 0; list-style: none; }
+      li { width: 9em; text-align: center; }
+      .cover { display: flex; align-items: center; justify-content: center;
+               height: 12em; background: #f2f2f2; color: #777; font-size: 0.9em; }
+      .cover img { max-width: 100%; max-height: 100%; }
+      code { font-size: 0.85em; }
+    </style>
   </head>
   <body>
-    <span id="coce-thumbnail1" data-id="2251005714"></span>
-    <span id="coce-thumbnail2" data-id="9780415480635"></span>
-    <span id="coce-thumbnail3" data-id="9780821417492"></span>
-    <span id="coce-thumbnail4" data-id="2847342257"></span>
-    <span id="coce-thumbnail5" data-id="9780563533191"></span>
+    <h1>Coce client sample</h1>
+    <p>
+      Covers of a few ISBNs, looked up at the Coce server below with
+      <code>coceclient.js</code>, at Open Library first, then Google Books,
+      then Amazon. See <code>README.md</code> next to this file.
+    </p>
+    <p id="status">Looking covers up…</p>
+
+    <!-- One element per record, with its ISBN in data-id, as a catalog
+         results page would have. -->
+    <ul>
+      <li><div class="cover" data-id="2251005714"></div><code>2251005714</code></li>
+      <li><div class="cover" data-id="9780415480635"></div><code>9780415480635</code></li>
+      <li><div class="cover" data-id="9780821417492"></div><code>9780821417492</code></li>
+      <li><div class="cover" data-id="2847342257"></div><code>2847342257</code></li>
+      <li><div class="cover" data-id="9780563533191"></div><code>9780563533191</code></li>
+      <li><div class="cover" data-id="9798885795692"></div><code>9798885795692</code></li>
+    </ul>
 
     <script>
-      document.addEventListener('DOMContentLoaded', () => {
-        const ids = [...document.querySelectorAll('[id^="coce-thumbnail"]')].map(
-          (el) => el.dataset.id,
-        );
-        if (ids.length === 0) return;
+      // Address of the Coce server, and providers in order of preference.
+      const COCE_URL = 'http://localhost:8080';
+      const PROVIDERS = 'ol,gb,aws';
 
-        const client = new CoceClient('http://localhost:8080', 'ol,gb,aws');
-        client
-          .fetch(ids, (id, url) => {
-            for (const el of document.querySelectorAll(`[data-id="${id}"]`)) {
+      document.addEventListener('DOMContentLoaded', async () => {
+        const status = document.getElementById('status');
+        const elements = [...document.querySelectorAll('.cover[data-id]')];
+        const ids = elements.map((el) => el.dataset.id);
+
+        const client = new CoceClient(COCE_URL, PROVIDERS);
+        try {
+          await client.fetch(ids, (id, url) => {
+            // Called for each ISBN with a cover, as soon as it is known.
+            for (const el of document.querySelectorAll(`.cover[data-id="${id}"]`)) {
               const img = document.createElement('img');
               img.src = url;
-              img.title = url;
-              el.append(img);
+              img.alt = `Cover of ISBN ${id}`;
+              el.replaceChildren(img);
             }
-          })
-          .catch((err) => console.error('coce fetch failed:', err));
+          });
+          status.textContent = `Done: ${COCE_URL}, providers ${PROVIDERS}.`;
+        } catch (err) {
+          // Coce unreachable, or an HTTP error: covers of other batches are
+          // still displayed.
+          status.textContent = `Coce request failed (${err.message}). Is Coce running at ${COCE_URL}?`;
+        }
+        for (const el of elements) {
+          if (!el.querySelector('img')) el.textContent = 'no cover';
+        }
       });
     </script>
   </body>
