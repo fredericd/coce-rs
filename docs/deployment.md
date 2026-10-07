@@ -52,31 +52,37 @@ See [logging](logging.md) for log levels and formats.
 
 ## Docker
 
-Configuration can come from `config.json`, from `COCE_*` environment
-variables, or both — env vars always win. This is the friendliest option for
-containers: no file to mount, values can be injected as env vars/secrets
-straight from `docker run`, `docker-compose.yml` or an orchestrator. See
-`.env.sample` for the full list of variables (they mirror `config.json.sample`
-one for one). Nested provider settings (`orb.user`, `orb.timeout`, ...) stay
-as `COCE_ORB_USER`, `COCE_ORB_TIMEOUT`, etc.
-
 ```sh
 cp .env.sample .env   # fill in what you need, e.g. COCE_ORB_USER/COCE_ORB_KEY
-docker compose up --build
+docker compose up -d --build
 ```
 
-`docker-compose.yml` starts Redis alongside coce and points `COCE_REDIS_HOST`
-at the `redis` service; every other variable comes from `.env`. The published
-port follows `COCE_PORT` from `.env` (8080 if unset), so change it there, not
-in `docker-compose.yml`. `config.json` is not copied into the image, so under
-Docker the port must be set in `.env`.
+`docker-compose.yml` runs two services: `redis` (with its data in the
+`redis-data` volume) and `coce`, both restarted automatically.
 
-The image is a static (musl) binary on `scratch`, about 8 MB. It has no
-shell or OS tools: `docker compose exec coce coce stats` works, `docker
-compose exec coce sh` does not. Dates in `/stats/daily` are in UTC.
+### Configuration: `.env` only
 
-To run the
-image standalone against an external Redis instead:
+Under Docker, coce is configured by `COCE_*` environment variables, read from
+`.env`. `config.json` is **not** used: `.dockerignore` keeps it out of the
+image and `docker-compose.yml` does not mount it, so coce starts from its
+built-in defaults with `.env` applied on top. `.env.sample` lists every
+variable; they mirror `config.json.sample` one for one (`orb.user` becomes
+`COCE_ORB_USER`, and so on).
+
+Two values are set by Compose rather than by `.env`:
+
+- `COCE_REDIS_HOST`/`COCE_REDIS_PORT` are forced to the `redis` service, the
+  only Redis reachable on the Compose network.
+- The published port is `COCE_PORT` from `.env` (8080 if unset): Compose
+  reads `.env` to build the `ports:` mapping, so the port coce listens on and
+  the port Docker exposes always match. Change it in `.env`, never in
+  `docker-compose.yml`.
+
+Mounting a `config.json` into the container (at `/home/coce/config.json`)
+would technically work, but env vars win over it and Compose cannot read the
+port from it, so a port set there would not be published. Stick to `.env`.
+
+To run the image standalone against an external Redis:
 
 ```sh
 docker build -t coce .
@@ -85,6 +91,61 @@ docker run -p 8080:8080 \
   -e COCE_PROVIDERS=aws,gb,ol \
   coce
 ```
+
+### Image design
+
+The image is built in two stages: `rust:1-alpine` compiles coce, and only
+the resulting binary is copied into an empty `scratch` image. The result is
+about 6–8 MB (depending on the architecture), against ~80 MB for the same
+binary on `debian:bookworm-slim`.
+
+- **Static musl binary.** Alpine's Rust toolchain targets musl, which links
+  everything statically: the binary needs no system library, which is what
+  makes `scratch` possible.
+- **mimalloc.** musl's own memory allocator collapses under multi-threaded
+  load, so musl builds use mimalloc instead (`Cargo.toml`, `src/main.rs`;
+  other builds keep the system allocator). In a benchmark of cached `/cover`
+  requests on 4 cores, musl without mimalloc served 3 to 5 times fewer
+  requests than glibc; with mimalloc it served ~65% more than glibc (Debian
+  or distroless) from 50 concurrent requests up. The trade-off is memory:
+  ~40 MB resident after heavy load, against ~15 MB on glibc.
+- **No OS files needed.** TLS root certificates (Mozilla's list, from the
+  `webpki-roots` crate) are compiled into the binary, as they already were
+  on Debian: the system `ca-certificates` was never used. Docker provides
+  `/etc/resolv.conf` and `/etc/hosts` for DNS at run time. See
+  [Updating dependencies and TLS roots](#updating-dependencies-and-tls-roots).
+- **Unprivileged user.** `scratch` has no `/etc/passwd`, so coce runs as
+  numeric UID/GID `10001`. A mounted directory coce must write to (e.g.
+  `COCE_CACHE_PATH`) has to be writable by that UID.
+- **No shell, no tools.** `docker compose exec coce coce stats` works;
+  `docker compose exec coce sh`, `ls`, `curl`, etc. do not exist in the
+  container. Debug from the host (`docker compose logs`, `curl` on the
+  published port) or with `docker compose exec redis redis-cli`.
+- **UTC.** There is no time zone database in the image, so dates (logs,
+  `/stats/daily`) are in UTC.
+
+### Updating dependencies and TLS roots
+
+`Cargo.lock` pins every dependency, the TLS root list included, so
+`docker compose build` alone always rebuilds the same thing. Updating means
+bumping the lock file:
+
+```sh
+cargo update              # or `cargo update -p webpki-roots` for the roots only
+cargo test
+git commit -am "Update dependencies" && git push
+# then on the server:
+git pull && docker compose up -d --build
+```
+
+The root list only matters when a change affects a CA used by one of the
+providers coce calls: a provider moving to a new CA, a root expiring, or
+Mozilla distrusting one. Roots are long-lived and such changes are rare, so
+there is no hard deadline, but updating every few months, or with each coce
+release, is a good habit. A full `cargo update` also brings security fixes in
+`rustls`, `reqwest` and the rest, which matter more. A stale root list shows
+up as one provider failing every call: its failures climb in `/stats`, it
+gets disabled, and the logs show a certificate error.
 
 ## Behind NGINX
 
