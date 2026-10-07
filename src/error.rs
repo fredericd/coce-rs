@@ -19,7 +19,10 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             AppError::MissingId => (StatusCode::BAD_REQUEST, "ID parameter is missing".to_string()),
-            AppError::BadId => (StatusCode::BAD_REQUEST, "Bad id parameter".to_string()),
+            AppError::BadId => (
+                StatusCode::BAD_REQUEST,
+                "Bad id parameter: too short, at least 8 characters expected".to_string(),
+            ),
             AppError::UnavailableProvider(p) => {
                 (StatusCode::BAD_REQUEST, format!("Unavailable provider: {p}"))
             }

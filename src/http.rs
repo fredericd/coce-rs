@@ -72,13 +72,12 @@ fn reject(state: &AppState, error: AppError) -> Response {
 async fn cover(State(state): State<AppState>, Query(q): Query<CoverQuery>) -> Response {
     state.stats.cover_request();
     let ids_raw = match q.id {
-        Some(v) if v.len() >= 8 => v,
-        _ => return reject(&state, AppError::MissingId),
+        Some(v) if v.is_empty() => return reject(&state, AppError::MissingId),
+        Some(v) if v.len() < 8 => return reject(&state, AppError::BadId),
+        Some(v) => v,
+        None => return reject(&state, AppError::MissingId),
     };
     let ids: Vec<String> = ids_raw.split(',').map(str::to_string).collect();
-    if ids.is_empty() {
-        return reject(&state, AppError::BadId);
-    }
     if ids.len() > state.config.max_ids {
         return reject(&state, AppError::TooManyIds(state.config.max_ids));
     }
