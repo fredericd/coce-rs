@@ -63,7 +63,7 @@ curl 'http://localhost:8080/cover?id=9780563533191,2847342257&provider=ol,gb,aws
 | [Deployment](docs/deployment.md) | systemd, Docker, NGINX, Redis availability, several instances |
 | [Administration](docs/administration.md) | `/stats`, daily history, cache purges, `coce cache-check` |
 | [Logging](docs/logging.md) | Log levels, `RUST_LOG`, JSON output, systemd and Docker |
-| [Performance](docs/performance.md) | Measurements and how to reproduce them |
+| [Performance](docs/performance.md) | Measurements, comparison with Coce for Node.js, how to reproduce them |
 | [Development](docs/development.md) | Code architecture, building and testing |
 
 ## License
