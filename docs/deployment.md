@@ -66,7 +66,10 @@ docker compose up --build
 ```
 
 `docker-compose.yml` starts Redis alongside coce and points `COCE_REDIS_HOST`
-at the `redis` service; every other variable comes from `.env`. To run the
+at the `redis` service; every other variable comes from `.env`. The published
+port follows `COCE_PORT` from `.env` (8080 if unset), so change it there, not
+in `docker-compose.yml`. `config.json` is not copied into the image, so under
+Docker the port must be set in `.env`. To run the
 image standalone against an external Redis instead:
 
 ```sh
