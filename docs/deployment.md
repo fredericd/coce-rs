@@ -69,7 +69,13 @@ docker compose up --build
 at the `redis` service; every other variable comes from `.env`. The published
 port follows `COCE_PORT` from `.env` (8080 if unset), so change it there, not
 in `docker-compose.yml`. `config.json` is not copied into the image, so under
-Docker the port must be set in `.env`. To run the
+Docker the port must be set in `.env`.
+
+The image is a static (musl) binary on `scratch`, about 8 MB. It has no
+shell or OS tools: `docker compose exec coce coce stats` works, `docker
+compose exec coce sh` does not. Dates in `/stats/daily` are in UTC.
+
+To run the
 image standalone against an external Redis instead:
 
 ```sh

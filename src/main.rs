@@ -10,6 +10,10 @@ mod providers;
 mod redis_store;
 mod stats;
 
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use clap::{Parser, Subcommand};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};

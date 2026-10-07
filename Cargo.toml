@@ -21,6 +21,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "1"
 anyhow = "1"
 
+# musl's allocator is slow under multi-threaded load: the static (Docker)
+# build uses mimalloc instead.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = "0.1"
+
 [profile.release]
 strip = true
 lto = true
