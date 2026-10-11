@@ -7,6 +7,7 @@
   "maxIds": 100,
   "notFoundTimeout": 86400,
   "statsDays": 30,
+  "setToken": "",
   "maxDelay": 0,
   "redis": {
     "host": "127.0.0.1",
