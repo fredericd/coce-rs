@@ -3,6 +3,7 @@
 | Endpoint | Purpose |
 |---|---|
 | `GET /cover` | Cover URLs for a list of IDs. |
+| `GET /delay/<ms>/cover` | `/cover`, answered after a delay, for testing (disabled by default). |
 | `GET /set` | Force the cover URL of an ID (protected by a token). |
 | `GET /stats`, `GET /stats/daily` | Activity and state, see [administration](administration.md). |
 | `GET /` | Answers `Welcome to coce`. |
@@ -73,6 +74,21 @@ The callback must be a JavaScript function name (letters, digits, `_`, `$`,
 (any origin): new clients should call Coce with `fetch()` and read plain
 JSON instead. JSONP stays supported, since Koha uses it.
 
+## Testing a slow Coce: `/delay`
+
+Once covers are cached, Coce answers in a few milliseconds, which hides how
+a client behaves when Coce is slow (e.g. for covers not cached yet).
+`/delay/<ms>/cover` takes the same parameters as `/cover`, and gives the same
+answer after `<ms>` milliseconds:
+
+    http://coce.server/delay/8000/cover?id=9780563533191&provider=ol,gb,aws
+
+A client adding `/cover` to a base URL can use it unchanged, with
+`http://coce.server/delay/8000` as base URL.
+
+It is disabled unless `maxDelay` is configured, and longer delays are
+refused: each delayed request keeps a connection open until it answers.
+
 ## Forcing a cover URL: `/set`
 
 `/set` stores a cover URL for an ID and a provider, for 10 years, e.g. to
@@ -97,9 +113,11 @@ Errors are JSON objects, `{"error": "<message>"}`.
 | Status | Endpoint | Cause |
 |---|---|---|
 | `400` | `/cover` | `id` missing or too short, more than `maxIds` IDs, provider not configured, invalid `callback`. |
+| `400` | `/delay` | Same as `/cover`, plus a delay longer than `maxDelay`. |
 | `400` | `/set` | Provider not configured, URL not http(s). |
 | `401` | `/set` | Missing or bad token. |
 | `403` | `/set` | `/set` disabled (no `setToken` configured). |
+| `403` | `/delay` | `/delay` disabled (no `maxDelay` configured). |
 | `503` | `/set`, `/stats/daily` | Redis can't be reached. |
 | `429` | any | Not from Coce: the reverse proxy's rate limit, if configured (see [deployment](deployment.md#behind-nginx)). |
 

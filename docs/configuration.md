@@ -26,6 +26,7 @@ are `host`, `port` and `timeout` when a `redis` section is given.
 | `maxIds` | `COCE_MAX_IDS` | `100` | Maximum number of IDs in a `/cover` request. Above it, Coce answers `400` (see [API](api.md#errors)). |
 | `statsDays` | `COCE_STATS_DAYS` | `30` | Days of activity history kept in Redis, for `/stats/daily` and `coce stats` (see [administration](administration.md#daily-history-statsdaily-and-coce-stats)). |
 | `setToken` | `COCE_SET_TOKEN` | unset | Secret required by `/set`, sent as a bearer token. `/set` is disabled when unset or empty (see [API](api.md#forcing-a-cover-url-set)). Use a long random value, e.g. `openssl rand -hex 32`. |
+| `maxDelay` | `COCE_MAX_DELAY` | `0` | Longest delay, in milliseconds, accepted by `/delay/<ms>/cover`, which answers like `/cover` after that delay, to test clients against a slow Coce. `/delay` is disabled when `0` (see [API](api.md#testing-a-slow-coce-delay)). |
 
 ## Redis: `redis`
 

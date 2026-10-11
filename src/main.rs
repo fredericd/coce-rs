@@ -98,6 +98,7 @@ async fn serve(cfg: Arc<config::Config>, config_path: &Path) -> anyhow::Result<(
         provider_retry_s = cfg.provider_retry,
         max_ids = cfg.max_ids,
         set_enabled = cfg.set_token.as_deref().is_some_and(|t| !t.is_empty()),
+        max_delay_ms = cfg.max_delay,
         redis = %format!("{}:{}", cfg.redis.host, cfg.redis.port),
         local_cache = cfg.cache.is_some(),
         "configuration loaded"

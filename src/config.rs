@@ -88,6 +88,11 @@ pub struct Config {
     /// `/set` is disabled when unset.
     #[serde(default, rename = "setToken")]
     pub set_token: Option<String>,
+    /// Longest delay (ms) accepted by `/delay/<ms>/cover`, which answers
+    /// like `/cover` after that delay, to test clients against a slow Coce.
+    /// `/delay` is disabled when 0 (the default).
+    #[serde(default, rename = "maxDelay")]
+    pub max_delay: u64,
     #[serde(default)]
     pub redis: RedisConfig,
     #[serde(default)]
@@ -135,6 +140,7 @@ impl Default for Config {
             not_found_timeout: default_cache_ttl(),
             stats_days: default_stats_days(),
             set_token: None,
+            max_delay: 0,
             redis: RedisConfig::default(),
             cache: None,
             gb: None,
@@ -228,6 +234,9 @@ impl Config {
         }
         if let Some(v) = env_string("COCE_SET_TOKEN") {
             self.set_token = Some(v);
+        }
+        if let Some(v) = env_u64("COCE_MAX_DELAY") {
+            self.max_delay = v;
         }
 
         if let Some(v) = env_string("COCE_REDIS_HOST") {

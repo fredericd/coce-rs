@@ -11,6 +11,8 @@ pub enum AppError {
     BadCallback,
     BadUrl,
     SetDisabled,
+    DelayDisabled,
+    DelayTooLong(u64),
     Unauthorized,
     CacheUnavailable,
 }
@@ -41,6 +43,13 @@ impl IntoResponse for AppError {
                 StatusCode::FORBIDDEN,
                 "/set is disabled: no setToken configured".to_string(),
             ),
+            AppError::DelayDisabled => (
+                StatusCode::FORBIDDEN,
+                "/delay is disabled: no maxDelay configured".to_string(),
+            ),
+            AppError::DelayTooLong(max) => {
+                (StatusCode::BAD_REQUEST, format!("Delay too long, maximum is {max} ms"))
+            }
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Missing or bad token".to_string()),
             AppError::CacheUnavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, "Cache unavailable".to_string())

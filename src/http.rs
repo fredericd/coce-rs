@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -37,6 +37,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/cover", get(cover))
+        .route("/delay/:ms/cover", get(delayed_cover))
         .route("/set", get(set))
         .route("/stats", get(stats))
         .route("/stats/daily", get(stats_daily))
@@ -124,6 +125,25 @@ async fn cover(State(state): State<AppState>, Query(q): Query<CoverQuery>) -> Re
         }
         None => Json(body).into_response(),
     }
+}
+
+/// `/cover`, answered after `ms` milliseconds: lets a client be tested
+/// against a slow Coce, even for covers already cached. Disabled unless
+/// `maxDelay` is set, and limited to it.
+async fn delayed_cover(
+    State(state): State<AppState>,
+    Path(ms): Path<u64>,
+    query: Query<CoverQuery>,
+) -> Response {
+    let max = state.config.max_delay;
+    if max == 0 {
+        return AppError::DelayDisabled.into_response();
+    }
+    if ms > max {
+        return AppError::DelayTooLong(max).into_response();
+    }
+    tokio::time::sleep(Duration::from_millis(ms)).await;
+    cover(State(state), query).await
 }
 
 #[derive(Deserialize)]
