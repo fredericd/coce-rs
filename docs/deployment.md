@@ -92,6 +92,53 @@ docker run -p 8080:8080 \
   coce
 ```
 
+### Published images
+
+CI publishes the image to `ghcr.io/fredericd/coce-rs`, for `linux/amd64`
+and `linux/arm64` (Docker picks the right one), so a server doesn't need
+the sources or a Rust build:
+
+| Tag | Points to | Updated |
+|---|---|---|
+| `latest` | the latest release | on each release |
+| `1.2.3` / `1.2` / `1` | release 1.2.3 / the latest 1.2.x / the latest 1.x | on each release |
+| `master` | the latest commit of `master` | on each push |
+| `sha-<commit>` | one exact commit | never: pin this, or a version, in production |
+
+Releases are the `v*` tags; each has a [GitHub
+release](https://github.com/fredericd/coce-rs/releases) with its changes.
+
+To use it with the provided `docker-compose.yml`, add a
+`docker-compose.override.yml` next to it (Compose reads it automatically),
+so `coce` is pulled instead of built (`!reset` needs Compose 2.24 or later):
+
+```yaml
+services:
+  coce:
+    image: ghcr.io/fredericd/coce-rs:1
+    pull_policy: always
+    build: !reset null
+```
+
+Updating is then a pull rather than a build:
+
+```sh
+docker compose pull coce && docker compose up -d
+```
+
+Or standalone, against an external Redis:
+
+```sh
+docker run -p 8080:8080 \
+  -e COCE_REDIS_HOST=redis.example.org \
+  -e COCE_PROVIDERS=aws,gb,ol \
+  ghcr.io/fredericd/coce-rs:1
+```
+
+Coce exits at startup when Redis is unreachable, so start Redis first (or
+let your orchestrator restart Coce until it is up). Once running, Coce
+survives Redis outages; see [Redis availability](#redis-availability).
+
 ### Image design
 
 The image is built in two stages: `rust:1-alpine` compiles coce, and only
