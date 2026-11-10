@@ -2,6 +2,8 @@
 
 A cover image URL cache, exposing its content as a REST web service.
 
+[![CI](https://github.com/fredericd/coce-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/fredericd/coce-rs/actions/workflows/ci.yml)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/fredericd/coce-rs)](https://github.com/fredericd/coce-rs/releases)
 [![MIT
 License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
@@ -18,7 +20,8 @@ OPACs: [Koha](https://koha-community.org) has a built-in Coce client.
   looked up at all providers in parallel, within a time limit.
 * **Robust**: a failing provider is disabled for a while instead of slowing
   every request down, and its failures are never cached as "no cover";
-  Coce keeps answering without Redis.
+  if Redis goes down, Coce keeps answering (Redis must be reachable when
+  Coce starts, though).
 * **Optional local copies** of the images, served by your own web server.
 * **Observable**: activity and state at `/stats`, a 30-day daily history,
   structured logs.
@@ -30,6 +33,14 @@ With Docker, Coce and Redis:
 ```sh
 cp .env.sample .env   # settings as environment variables
 docker compose up --build
+```
+
+Or with the published image (`linux/amd64` and `linux/arm64`), against an
+existing Redis; see [published images](docs/deployment.md#published-images):
+
+```sh
+docker run -p 8080:8080 -e COCE_REDIS_HOST=redis.example.org \
+  ghcr.io/fredericd/coce-rs:latest
 ```
 
 Or from the sources, with a Redis server on `localhost:6379`:
@@ -60,7 +71,7 @@ curl 'http://localhost:8080/cover?id=9780563533191,2847342257&provider=ol,gb,aws
 | [API](docs/api.md) | `/cover`, JSONP, `/set`, errors, Koha and JavaScript clients |
 | [Configuration](docs/configuration.md) | Every setting, its environment variable and default |
 | [Providers](docs/providers.md) | How each provider is queried, its limits, failure handling |
-| [Deployment](docs/deployment.md) | systemd, Docker, NGINX, Redis availability, several instances |
+| [Deployment](docs/deployment.md) | systemd, Docker, published images, NGINX, Redis availability, several instances |
 | [Administration](docs/administration.md) | `/stats`, daily history, cache purges, `coce cache-check` |
 | [Logging](docs/logging.md) | Log levels, `RUST_LOG`, JSON output, systemd and Docker |
 | [Performance](docs/performance.md) | Measurements, comparison with Coce for Node.js, how to reproduce them |
