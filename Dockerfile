@@ -7,7 +7,7 @@ WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release
+RUN cargo build --release --locked
 
 ## --- runtime stage ---
 # No OS at all: TLS roots are compiled in (webpki-roots), and Docker provides
